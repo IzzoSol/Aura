@@ -13,6 +13,17 @@ const aura = require('./aura-core');
 let PKG = { version: '0.0.0' };
 try { PKG = require('./package.json'); } catch (_) {}
 
+// stdout MUST carry only JSON-RPC frames — any stray log corrupts the protocol.
+// Redirect console.* to stderr defensively so nothing can poison the stream.
+console.log = console.info = console.debug = function () {
+  try { process.stderr.write(Array.prototype.join.call(arguments, ' ') + '\n'); } catch (_) {}
+};
+
+// Cap tool inputs so a client can't exhaust memory with a giant string.
+const MAX_PROMPT = 20000;
+const MAX_ANSWER = 200000;
+function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) : s; }
+
 const TOOLS = [
   {
     name: 'aura_ask',
@@ -57,12 +68,13 @@ function textResult(obj) { return { content: [{ type: 'text', text: typeof obj =
 async function callTool(name, args) {
   args = args || {};
   if (name === 'aura_ask') {
-    const r = await aura.ask(String(args.prompt || ''), { llm: false });
+    // llm:false — the MCP server NEVER calls a paid model or touches API keys.
+    const r = await aura.ask(clip(args.prompt, MAX_PROMPT), { llm: false });
     if (r && r.hit) return textResult({ hit: true, method: r.method, answer: r.answer });
     return textResult({ hit: false, note: 'No free answer — generate it yourself, then call aura_remember to cache it.' });
   }
   if (name === 'aura_remember') {
-    aura.recordAnswer(String(args.prompt || ''), String(args.answer || ''));
+    aura.recordAnswer(clip(args.prompt, MAX_PROMPT), clip(args.answer, MAX_ANSWER));
     return textResult({ ok: true, remembered: true });
   }
   if (name === 'aura_stats') {
@@ -83,6 +95,10 @@ async function handle(msg) {
   }
   if (method === 'notifications/initialized' || method === 'initialized') return; // notification, no reply
   if (method === 'ping') return ok(id, {});
+  // Some clients probe these — answer with empty sets so they don't log errors.
+  if (method === 'resources/list') return ok(id, { resources: [] });
+  if (method === 'resources/templates/list') return ok(id, { resourceTemplates: [] });
+  if (method === 'prompts/list') return ok(id, { prompts: [] });
   if (method === 'tools/list') return ok(id, { tools: TOOLS });
   if (method === 'tools/call') {
     try {
