@@ -46,7 +46,7 @@ aura ask "our refund policy"          # → free, from cache
 aura stats
 ```
 
-(To undo the global install: `npm uninstall -g @shaddai/aura`.)
+(To undo the global install: `npm uninstall -g shaddai-aura`.)
 
 ---
 
@@ -126,20 +126,20 @@ Add to `claude_desktop_config.json` (Settings → Developer → Edit Config):
 ```json
 {
   "mcpServers": {
-    "aura": { "command": "npx", "args": ["-y", "-p", "@shaddai/aura", "aura-mcp"] }
+    "aura": { "command": "npx", "args": ["-y", "-p", "shaddai-aura", "aura-mcp"] }
   }
 }
 ```
 
 ### Claude Code
 ```
-claude mcp add aura -- npx -y -p @shaddai/aura aura-mcp
+claude mcp add aura -- npx -y -p shaddai-aura aura-mcp
 ```
 
 ### Cursor
 Add to `.cursor/mcp.json`:
 ```json
-{ "mcpServers": { "aura": { "command": "npx", "args": ["-y", "-p", "@shaddai/aura", "aura-mcp"] } } }
+{ "mcpServers": { "aura": { "command": "npx", "args": ["-y", "-p", "shaddai-aura", "aura-mcp"] } } }
 ```
 
 ### Running from a local clone (before the npm package is published)
@@ -158,7 +158,7 @@ Point the client's `command` at your checkout instead:
 ## Use it as a library (for the dashboard / other code)
 
 ```js
-const aura = require('@shaddai/aura');     // or require('./aura-core')
+const aura = require('shaddai-aura');     // or require('./aura-core')
 const r = aura.route('what is 2+2');        // { hit:true, method:'compute', answer:'4', ... }
 const full = await aura.ask('...', { llm: true });
 aura.recordAnswer('q', 'a');                // cache an answer
