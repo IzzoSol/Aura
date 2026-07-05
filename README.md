@@ -68,7 +68,7 @@ Core audited safe: no `eval` / `Function` / `child_process` / shell, bounded cac
 
 | Repo | What |
 |------|------|
-| **[Shaddai](https://github.com/IzzoIzzoIzzo/Shaddai)** | The sovereign AI agent empire — 7 agents, 5,000+ skills |
+| **[Shaddai](https://github.com/IzzoIzzoIzzo/Shaddai)** | The sovereign AI agent empire — 7 agents, 200+ real tools |
 | **[aura](https://github.com/IzzoIzzoIzzo/aura)** | *(this)* dependency-free token-saver · CLI + MCP + library |
 | **[Shaddai-Clipper-Feature-](https://github.com/IzzoIzzoIzzo/Shaddai-Clipper-Feature-)** | Long video → captioned vertical shorts |
 
