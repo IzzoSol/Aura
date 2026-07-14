@@ -70,7 +70,7 @@ test('ask without --llm returns miss for novel prose', async () => {
   assert.strictEqual(r.method, 'miss');
 });
 
-// --- AINL-inspired upgrades ---
+// --- deterministic fast-path upgrades ---
 test('template: percent of', () => {
   assert.strictEqual(A.route('what is 15% of 240').answer, '36');
   assert.strictEqual(A.route('15 percent of 240').answer, '36');

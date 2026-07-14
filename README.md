@@ -31,7 +31,7 @@ and parameter-less skill recipes. What can be answered for free, is.
 
 In one line: **AURA is a zero-dependency, policy-gated deterministic pre-processor for AI agents.** It resolves repeated, structured, or computable prompts locally, validates reusable skills, and only lets a paid model run when you configure it to.
 
-> **Inspired by [AINL (AI Native Lang)](https://github.com/sbhooley/ainativelang).** AINL's core idea is to *keep the model off the hot path*: figure something out once, then run it deterministically forever. AURA applies that principle at the small end — cache, local compute, and author-defined skills mean recurring prompts cost nothing, with **no compiler, no graph runtime, and no dependencies**. AURA is complementary to AINL, not a replacement — see **[COMPARISON.md](COMPARISON.md)** for an honest side-by-side (and when to reach for AINL, GPTCache, or LangChain instead).
+> **The core principle: keep the model off the hot path.** Figure something out once, then run it deterministically forever. AURA applies that at the small end — cache, local compute, and author-defined skills mean recurring prompts cost nothing, with **no compiler, no graph runtime, and no dependencies**. See **[COMPARISON.md](COMPARISON.md)** for an honest side-by-side with LLM caches (and when to reach for GPTCache or LangChain instead).
 
 ## ✦ Install
 

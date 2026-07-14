@@ -55,7 +55,7 @@ function estTokens(str) { return Math.max(1, Math.ceil(String(str || '').length 
 function normalize(p) { return String(p || '').toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim(); }
 function hashKey(p) { return crypto.createHash('sha256').update(normalize(p)).digest('hex'); }
 function toks(s) { return normalize(s).split(' ').filter(Boolean); }
-// AINL principle: reduce entropy/ambiguity before matching. Strip filler so CONTENT words
+// Reduce entropy/ambiguity before matching. Strip filler so CONTENT words
 // dominate similarity — "what's the X?" then matches a cached "X". Falls back to raw tokens
 // if stripping would empty the prompt.
 const STOP = new Set(['a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'to', 'of', 'in', 'on', 'at', 'for', 'and', 'or', 'what', 'whats', 's', 'please', 'me', 'tell', 'give', 'do', 'you', 'can', 'how', 'i', 'my', 'it', 'this', 'that', 'with', 'about', 'show']);
@@ -210,7 +210,7 @@ function dateOp(prompt) {
   if (/\b(current time|what(?:'s| is) the time|time right now)\b/.test(p)) return new Date().toISOString();
   return null;
 }
-// --- parametric templates (AINL "compile once → run free"): recognize a recurring
+// --- parametric templates ("compile once → run free"): recognize a recurring
 //     SHAPE and solve any instance deterministically, forever, with no LLM. ---
 const round2 = (n) => Math.round(n * 100) / 100;
 function percentOf(p) {
@@ -375,7 +375,7 @@ function clearCache() { return writeJson(CACHE_FILE, {}); }
 
 // =========================================================================== SKILLS REGISTRY (Stage 2)
 /**
- * AURA's version of an AINL "compiled program": define a named, deterministic skill
+ * A "compiled program": define a named, deterministic skill
  * ONCE (a pattern -> action) and run it forever with NO LLM call.
  *
  * Persisted at <AURA_HOME>/skills.json as an array of:
@@ -586,7 +586,7 @@ async function runAdapter(name, args, m) {
  *   light    — short, simple Q&A / rewrite / classify (cheapest model)
  *   balanced — multi-step reasoning, summaries, medium length
  *   heavy    — code, long context, math proofs, "explain in depth"
- * Heuristic only (free): length + keyword signals. AINL principle — keep intelligence
+ * Heuristic only (free): length + keyword signals. Keep intelligence
  * off the hot path; a tiny deterministic classifier replaces a model-picks-model call.
  */
 function classifyTier(prompt) {

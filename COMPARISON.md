@@ -6,27 +6,25 @@ This document is honest on purpose: it names what AURA does *not* do.
 
 ## At a glance
 
-| Capability | AURA | AINL | LangChain LLM cache | GPTCache |
-|---|---|---|---|---|
-| Zero-dependency runtime | ✅ (Node built-ins only) | ➖ lean core, broad optional extras | ❌ part of a framework | ❌ Python lib + backends |
-| Deterministic pre-processing | ✅ | ✅ | ⚠️ partial | ⚠️ partial |
-| Policy gate before an LLM call | ✅ (skill `policy`, roadmap) | ✅ | ❌ not a primary feature | ❌ not a primary feature |
-| Graph IR + compiler | ❌ (not a language) | ✅ canonical graph IR + compiler | ❌ | ❌ |
-| Multi-target emit (LangGraph/Temporal/…) | ❌ | ✅ | ❌ | ❌ |
-| MCP server | ✅ | ✅ | ➖ via integrations | ➖ not core |
-| Semantic cache | ⚠️ word-overlap today | ➖ not core | ➖ via backends | ✅ embeddings |
-| Learns from your own history | ✅ `learn-sessions` | ❌ | ❌ | ❌ |
-| Install footprint | one `npx`, no deps | Python pkg + extras | framework | Python + vector store |
+| Capability | AURA | LangChain LLM cache | GPTCache |
+|---|---|---|---|
+| Zero-dependency runtime | ✅ (Node built-ins only) | ❌ part of a framework | ❌ Python lib + backends |
+| Deterministic pre-processing | ✅ | ⚠️ partial | ⚠️ partial |
+| Policy gate before an LLM call | ✅ (skill `policy`, roadmap) | ❌ not a primary feature | ❌ not a primary feature |
+| MCP server | ✅ | ➖ via integrations | ➖ not core |
+| Semantic cache | ⚠️ word-overlap today | ➖ via backends | ✅ embeddings |
+| Learns from your own history | ✅ `learn-sessions` | ❌ | ❌ |
+| Install footprint | one `npx`, no deps | framework | Python + vector store |
 
 ✅ yes · ⚠️ limited · ➖ partial/optional · ❌ no
 
-## Versus AINL (`ainativelang`)
+## The core idea
 
-[AINL](https://github.com/sbhooley/ainativelang) is the closest reference for AURA's *direction* and is a much larger system: a real workflow **language** with a compiler, a canonical graph IR, a verified deterministic runtime, policy-gated execution, a broad adapter catalog, record/replay, audit trails, an LSP, and multi-target emitters (LangGraph, Temporal, FastAPI, Solana). It is Apache-2.0, ~100K+ lines of Python with a Rust production sibling.
-
-**AURA does not compete with that scope, and shouldn't.** AURA is a pre-processor you drop in front of an agent in one line; AINL is a language you author programs in. Where they overlap is the core idea both share — *don't re-prompt the model to orchestrate the same workflow on every run.* AINL is refreshingly honest that this "compile once, run many" win is large only versus a baseline that re-prompts routing each time, and roughly break-even versus a hand-written deterministic runner.
-
-AURA's bet is the **small end** of that same idea: the most common recurring prompts (lookups, calculations, transforms, canned answers) shouldn't reach a model at all, and you shouldn't need a compiler, a graph runtime, or any dependencies to get that. If you need graph compilation, multi-runtime emit, or sandboxed capability isolation, use AINL — and consider AURA as a zero-dep cache/policy layer in front of it.
+AURA's bet is the **small end** of one idea: *don't re-prompt the model to do the same
+deterministic work on every run.* The most common recurring prompts — lookups, calculations,
+transforms, canned answers — shouldn't reach a model at all, and you shouldn't need a
+compiler, a graph runtime, or any dependencies to get that. Figure it out once, then run it
+free forever.
 
 ## Versus LangChain's LLM cache
 
@@ -39,7 +37,6 @@ GPTCache is strong prior art for **semantic caching**: it answers equivalent pro
 ## When NOT to use AURA
 
 - You need dense **semantic** matching across paraphrases at scale → GPTCache (or an embedding layer in front of AURA).
-- You need to author and compile **multi-step workflow graphs** with typed IR and multi-runtime emit → AINL.
 - Your prompts are almost all novel, creative, long-form generation → a cache/pre-processor can't help; you're paying for the model regardless.
 - You need distributed, high-throughput, multi-tenant caching with shared state → use a real cache tier (Redis) with semantic keys.
 
