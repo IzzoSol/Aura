@@ -18,6 +18,7 @@
     "lib/",
     "schema/",
     "README.md",
+    "CHANGELOG.md",
     "COMPARISON.md",
     "BENCHMARK.md",
     "LICENSE",
