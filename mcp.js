@@ -118,6 +118,44 @@ const TOOLS = [
       },
       required: ['prompt']
     }
+  },
+  {
+    name: 'aura_select_tools',
+    description:
+      "Selective tool injection: given the current prompt (or recent messages) and your FULL tool list, " +
+      "return only the tools this turn needs — so you don't re-send the whole toolbox on every call. " +
+      'Deterministic, context-aware, and FAILS OPEN (never drops a tool it cannot rule out). ' +
+      'Returns { tools, report:{ total, sent, savedTokens, dropped } }. Works with OpenAI and Anthropic tool shapes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'The current user prompt (or omit and pass messages).' },
+        messages: { type: 'array', description: 'Recent messages for context-aware selection (used if prompt is omitted).', items: { type: 'object' } },
+        tools: { type: 'array', description: 'Your full tool list (OpenAI or Anthropic shape).', items: { type: 'object' } },
+        k: { type: 'integer', description: 'Max tools to send (default ~25% of the toolbox).' },
+        alwaysInclude: { type: 'array', description: 'Tool names to always send.', items: { type: 'string' } }
+      },
+      required: ['tools']
+    }
+  },
+  {
+    name: 'aura_optimize',
+    description:
+      'One-call context optimizer: trims your tools (selective injection), distills your system prompt, and ' +
+      'compresses your history — returning a leaner request to send. Optional maxTokens hard-fits a budget; ' +
+      'cache:true marks the stable prefix cacheable (cache_control). Returns { request, report } with per-surface savings. ' +
+      'Call this to shrink a full model request before sending it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        system: { type: 'string', description: 'System prompt (string).' },
+        messages: { type: 'array', description: 'Conversation history.', items: { type: 'object' } },
+        tools: { type: 'array', description: 'Full tool list.', items: { type: 'object' } },
+        k: { type: 'integer', description: 'Max tools to send.' },
+        maxTokens: { type: 'integer', description: 'Hard token budget for the whole request.' },
+        cache: { type: 'boolean', description: 'Mark the stable prefix cacheable (Anthropic cache_control).' }
+      }
+    }
   }
 ];
 
@@ -177,7 +215,43 @@ async function callTool(name, args) {
     try { toolCache = toolStats(); } catch (_) { toolCache = { error: 'tool-cache stats unavailable' }; }
     return textResult({ answerCache, toolCache });
   }
+  if (name === 'aura_select_tools') {
+    if (!Array.isArray(args.tools)) return Object.assign(textResult({ error: 'tools must be an array' }), { isError: true });
+    const tools = args.tools.slice(0, 500);
+    const q = Array.isArray(args.messages) ? args.messages.slice(0, MAX_MESSAGES) : clip(args.prompt, MAX_PROMPT);
+    const opts = {};
+    if (Number.isInteger(args.k) && args.k > 0) opts.k = args.k;
+    if (Array.isArray(args.alwaysInclude)) opts.alwaysInclude = args.alwaysInclude.slice(0, 100).map(String);
+    const r = aura.selectTools(q, tools, opts);
+    return textResult({ tools: r.tools, report: r.report });
+  }
+  if (name === 'aura_optimize') {
+    const request = {};
+    if (typeof args.system === 'string') request.system = clip(args.system, MAX_ANSWER);
+    if (Array.isArray(args.messages)) request.messages = args.messages.slice(0, MAX_MESSAGES).map((m) => {
+      m = m || {};
+      const content = typeof m.content === 'string' ? clip(m.content, MAX_MSG_CONTENT) : m.content;
+      return { role: clip(m.role == null ? 'user' : m.role, 64) || 'user', content };
+    });
+    if (Array.isArray(args.tools)) request.tools = args.tools.slice(0, 500);
+    const opts = {};
+    if (Number.isInteger(args.k) && args.k > 0) opts.tools = { k: args.k };
+    if (Number(args.maxTokens) > 0) opts.maxTokens = Number(args.maxTokens);
+    if (args.cache === true) opts.cache = true;
+    const r = aura.optimize(request, opts);
+    return textResult({ request: r.request, report: r.report });
+  }
   return Object.assign(textResult('Unknown tool: ' + name), { isError: true });
+}
+
+// The one MCP resource: AURA's live savings ledger, so any client can pull "what has AURA
+// saved" straight into its own context without a tool round-trip.
+const SAVINGS_URI = 'aura://savings';
+function savingsPayload() {
+  let answerCache, toolCache;
+  try { answerCache = aura.stats(); } catch (_) { answerCache = { error: 'answer-cache stats unavailable' }; }
+  try { toolCache = toolStats(); } catch (_) { toolCache = { error: 'tool-cache stats unavailable' }; }
+  return { answerCache, toolCache };
 }
 
 async function handle(msg) {
@@ -186,14 +260,20 @@ async function handle(msg) {
     const proto = params && params.protocolVersion;
     return ok(id, {
       protocolVersion: proto || '2024-11-05',
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, resources: {} },
       serverInfo: { name: 'aura', version: PKG.version }
     });
   }
   if (method === 'notifications/initialized' || method === 'initialized') return; // notification, no reply
   if (method === 'ping') return ok(id, {});
-  // Some clients probe these — answer with empty sets so they don't log errors.
-  if (method === 'resources/list') return ok(id, { resources: [] });
+  if (method === 'resources/list') return ok(id, { resources: [
+    { uri: SAVINGS_URI, name: 'AURA savings', description: 'Live per-surface token & cost savings ledger (tools · history · instructions · answers).', mimeType: 'application/json' }
+  ] });
+  if (method === 'resources/read') {
+    const uri = params && params.uri;
+    if (uri === SAVINGS_URI) return ok(id, { contents: [{ uri: SAVINGS_URI, mimeType: 'application/json', text: JSON.stringify(savingsPayload()) }] });
+    return fail(id, -32602, 'Unknown resource: ' + uri);
+  }
   if (method === 'resources/templates/list') return ok(id, { resourceTemplates: [] });
   if (method === 'prompts/list') return ok(id, { prompts: [] });
   if (method === 'tools/list') return ok(id, { tools: TOOLS });

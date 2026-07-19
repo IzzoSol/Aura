@@ -3,6 +3,15 @@
 All notable changes to **shaddai-aura** (AURA). Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semver.
 
+## [0.6.2] — 2026-07-19
+
+### Added
+- **MCP deepening** — the server now exposes AURA's context optimizer to any MCP client
+  (Claude Desktop / Claude Code / Cursor): two new tools — **`aura_select_tools`** (selective
+  tool injection) and **`aura_optimize`** (the full one-call optimizer) — bringing it to 8
+  tools, plus a read-only **`aura://savings`** resource so clients can pull the live per-surface
+  savings ledger straight into their context. `resources` capability now advertised.
+
 ## [0.6.1] — 2026-07-19
 
 ### Added

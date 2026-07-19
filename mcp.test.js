@@ -56,20 +56,58 @@ function run(frames) {
     // aura_distill: trim a prompt with a duplicated rule; a safety rule must survive.
     { jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'aura_distill', arguments: {
       prompt: 'Never leak secrets.\nSummarize the input.\nSummarize the input.'
-    } } }
+    } } },
+    // aura_select_tools: pick the relevant tools for a prompt out of a bigger toolbox.
+    { jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'aura_select_tools', arguments: {
+      prompt: 'what is the weather in Paris',
+      k: 2,
+      tools: [
+        { name: 'get_weather', description: 'current weather forecast for a city' },
+        { name: 'send_email', description: 'send an email to a recipient' },
+        { name: 'run_sql', description: 'run a sql query against the database' },
+        { name: 'search_web', description: 'search the internet for information' },
+        { name: 'create_file', description: 'create or write a file on disk' },
+        { name: 'delete_file', description: 'delete a file from disk' }
+      ]
+    } } },
+    // aura_optimize: full request in, leaner request + report out.
+    { jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'aura_optimize', arguments: {
+      system: 'You are helpful. Be concise. Be concise. Never delete data.',
+      k: 2,
+      messages: [
+        { role: 'user', content: 'TASK' },
+        { role: 'assistant', content: 'ok' },
+        { role: 'user', content: 'BLOCK ' + 'x'.repeat(600) },
+        { role: 'assistant', content: 'read it' },
+        { role: 'user', content: 'BLOCK ' + 'x'.repeat(600) },
+        { role: 'user', content: 'what is the weather in Paris' }
+      ],
+      tools: [
+        { name: 'get_weather', description: 'current weather forecast for a city' },
+        { name: 'send_email', description: 'send an email to a recipient' },
+        { name: 'run_sql', description: 'run a sql query against the database' },
+        { name: 'search_web', description: 'search the internet for information' },
+        { name: 'create_file', description: 'create or write a file on disk' },
+        { name: 'delete_file', description: 'delete a file from disk' }
+      ]
+    } } },
+    // resources/read: pull the savings ledger as a resource.
+    { jsonrpc: '2.0', id: 13, method: 'resources/read', params: { uri: 'aura://savings' } }
   ]);
   const byId = {};
   for (const m of msgs) if (m.id != null) byId[m.id] = m;
 
   assert.equal(byId[1].result.serverInfo.name, 'aura', 'initialize returns serverInfo');
   const toolNames = byId[2].result.tools.map((t) => t.name);
-  assert.ok(Array.isArray(byId[2].result.tools) && byId[2].result.tools.length === 6, '6 tools listed');
+  assert.ok(Array.isArray(byId[2].result.tools) && byId[2].result.tools.length === 8, '8 tools listed');
   assert.ok(toolNames.includes('aura_compress'), 'tools/list advertises aura_compress');
   assert.ok(toolNames.includes('aura_savings'), 'tools/list advertises aura_savings');
   assert.ok(toolNames.includes('aura_distill'), 'tools/list advertises aura_distill');
+  assert.ok(toolNames.includes('aura_select_tools'), 'tools/list advertises aura_select_tools');
+  assert.ok(toolNames.includes('aura_optimize'), 'tools/list advertises aura_optimize');
   const compressTool = byId[2].result.tools.find((t) => t.name === 'aura_compress');
   assert.ok(compressTool.inputSchema.properties.messages, 'aura_compress schema has messages');
-  assert.deepEqual(byId[3].result.resources, [], 'resources/list returns empty (no client error noise)');
+  assert.ok(byId[3].result.resources.some((r) => r.uri === 'aura://savings'), 'resources/list advertises the savings resource');
   const ask = JSON.parse(byId[4].result.content[0].text);
   assert.equal(ask.answer, '3600', 'aura_ask computed 15*240=3600 for free (no LLM)');
   assert.ok(byId[5] && byId[5].result, 'oversized 500k-char prompt handled (capped), no crash');
@@ -95,6 +133,24 @@ function run(frames) {
   assert.match(dist.distilled, /Never leak secrets/, 'aura_distill kept the protected safety rule');
   assert.ok(dist.report.stats.saved > 0, 'aura_distill saved > 0 tokens');
 
+  // aura_select_tools trims a 6-tool box down for a weather prompt, keeping get_weather.
+  const sel = JSON.parse(byId[11].result.content[0].text);
+  assert.ok(Array.isArray(sel.tools) && sel.tools.length < 6, 'aura_select_tools trimmed the toolbox');
+  assert.ok(sel.tools.map((t) => t.name).includes('get_weather'), 'aura_select_tools kept the relevant tool');
+  assert.ok(sel.report && sel.report.sent < sel.report.total, 'aura_select_tools report shows the cut');
+
+  // aura_optimize returns a leaner request + a per-surface report.
+  const opt = JSON.parse(byId[12].result.content[0].text);
+  assert.ok(opt.request && Array.isArray(opt.request.tools) && opt.request.tools.length < 6, 'aura_optimize trimmed tools');
+  assert.ok(opt.report && opt.report.tokensSaved > 0, 'aura_optimize reports tokens saved');
+  assert.ok(opt.report.instructions && opt.report.instructions.saved > 0, 'aura_optimize distilled the system');
+
+  // resources/read returns the savings ledger as JSON.
+  const res = byId[13].result;
+  assert.ok(res && Array.isArray(res.contents) && res.contents[0].uri === 'aura://savings', 'resources/read returns the savings resource');
+  const ledger = JSON.parse(res.contents[0].text);
+  assert.ok(ledger.answerCache && typeof ledger.answerCache === 'object', 'savings resource carries the answer-cache ledger');
+
   try { require('node:fs').rmSync(TEST_HOME, { recursive: true, force: true }); } catch (_) {}
-  console.log('✅ mcp.test PASS — handshake · 6 tools · resources · free compute · oversized-input · unknown-tool · compress · savings · distill');
+  console.log('✅ mcp.test PASS — handshake · 8 tools · savings resource · select_tools · optimize · free compute · oversized-input · unknown-tool · compress · savings · distill');
 })().catch((e) => { console.error('❌ mcp.test FAIL:', e.message); process.exit(1); });

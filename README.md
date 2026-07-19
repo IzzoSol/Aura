@@ -241,7 +241,11 @@ It exposes six zero-dependency tools:
 | `aura_stats` | Show tokens & dollars saved. |
 | `aura_distill` | Trim redundant instructions from a prompt/system-prompt (protects safety/output/routing rules; flags the rest). |
 | `aura_compress` | Shrink a long conversation history before the next turn. |
+| `aura_select_tools` | Selective tool injection — return only the tools this turn needs from your full toolbox (fails open). |
+| `aura_optimize` | The full one-call optimizer — trim tools + distill system + compress history on a whole request. |
 | `aura_savings` | Combined answer-cache + tool-cache savings report. |
+
+Plus a read-only resource **`aura://savings`** — the live per-surface savings ledger, pullable straight into a client's context.
 
 **Claude Code:** `claude mcp add aura -- npx -y -p shaddai-aura aura-mcp`
 
