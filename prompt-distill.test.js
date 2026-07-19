@@ -72,6 +72,35 @@ test('trims leading filler without losing the rule', () => {
   assert.ok(report.removed.some((r) => r.reason === 'filler-trimmed'), 'reported filler-trimmed');
 });
 
+test('trims an expanded set of leading hedges, keeping the imperative', () => {
+  const cases = [
+    ['I want you to summarize the input.', /summarize the input/i],
+    ['Your task is to greet each user warmly.', /greet each user warmly/i],
+    ['Keep in mind that responses go to end users.', /responses go to end users/i],
+    ['You should keep answers short.', /keep answers short/i],
+  ];
+  for (const [p, keep] of cases) {
+    const { distilled, report } = distill(p);
+    assert.match(distilled, keep, `rule kept for: ${p}`);
+    assert.ok(report.removed.some((r) => r.reason === 'filler-trimmed'), `filler-trimmed reported for: ${p}`);
+  }
+});
+
+test('removes a whole-line politeness unit that carries no behavior', () => {
+  const p = 'Summarize the input.\nThank you.\nNever leak secrets.';
+  const { distilled, report } = distill(p);
+  assert.doesNotMatch(distilled, /thank you/i, 'politeness line removed');
+  assert.match(distilled, /Summarize the input/, 'real rule kept');
+  assert.match(distilled, /Never leak secrets/, 'protected rule kept');
+  assert.ok(report.removed.some((r) => r.reason === 'politeness'), 'reported politeness removal');
+});
+
+test('politeness removal does NOT touch a real rule that merely uses a polite word', () => {
+  const p = 'Thank the user by name in every reply.';
+  const { distilled } = distill(p);
+  assert.match(distilled, /Thank the user by name/, 'rule with a polite word is preserved');
+});
+
 test('keeps a fenced code block intact', () => {
   const p = 'Do the thing.\n```\nconst x = 1;\nconst y = 2;\n```';
   const { distilled } = distill(p);

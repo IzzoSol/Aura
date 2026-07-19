@@ -2,13 +2,18 @@
 
 # 💾 AURA
 
-### The dependency-free LLM token-saver
+### The dependency-free context optimizer for AI agents
 
 *Part of the [⚡ SHADDAI](https://shaddai-g81x.onrender.com) family*
 
-Answer recurring prompts for **free** — cache, compute, seed, and skill fast-paths that
-never touch the model. Ships as a **CLI**, an **MCP server** (Claude / Cursor / Claude Code),
-and a **library**. Zero dependencies. Pure JSON-RPC. Security-hardened.
+Your agent re-sends its **whole toolbox, its whole history, and its whole system prompt on
+every single call** — most of it dead weight. AURA trims what you send *before* the request:
+sends only the tools this turn needs, compacts stale history, and distills bloated prompts.
+Deterministic, zero-dependency, and it **fails open** — it never silently drops something the
+model needed. Ships as a **CLI**, an **MCP server** (Claude / Cursor / Claude Code), and a **library**.
+
+> **40-tool agent, real prompts: 82% of tool-schema tokens cut** (`npm run bench`). At $3/M input
+> that's ~$410 saved per 100k calls — from tool schemas *alone*, before history or prompt savings.
 
 <br>
 
@@ -44,6 +49,42 @@ npm i -g shaddai-aura
 aura ask "recurring question"
 aura stats
 ```
+
+## ✦ One call: `aura.optimize(request)`
+
+The drop-in. Give AURA your model request; it returns a leaner one — only the tools this turn
+needs, a distilled system prompt, and a compacted history — ready to send. Non-mutating, and
+each surface is tunable or skippable.
+
+Handles every real request shape: a string `system`, an Anthropic **block-array** `system`
+(`[{type:'text', text, cache_control}]` — structure and `cache_control` preserved), or an
+OpenAI `system` role message. Tools in OpenAI or Anthropic form both work.
+
+```js
+const aura = require('shaddai-aura');
+
+// your normal request (OpenAI or Anthropic shape both work)
+const { request, report } = aura.optimize(
+  { system, messages, tools },
+  { tools: { k: 6 } }               // optional: tune/disable any surface
+);
+
+await client.messages.create(request);   // send the optimized request instead
+
+report // → { tools:{total,sent,saved}, instructions:{saved}, history:{saved,elided}, tokensSaved }
+```
+
+One line, three savers: **tools + instructions + history**, all deterministic, all reported.
+Or call them individually: `aura.selectTools`, `aura.distill`, `aura.compress`.
+
+**Fit a hard context budget:** pass `maxTokens` and AURA compresses hard enough to make the
+*whole* request fit, then tells you the truth — `report.budget = { limit, finalTokens, fit }`.
+`fit:false` means it squeezed as far as it safely could without touching the protected core
+(system, task, recent turns) — it never silently drops those to hit a number.
+
+> **Capstone benchmark** (`npm run bench`) — a real 10-turn agent session, 40 tools, growing
+> history re-sent every call: **60% of total request tokens saved** (tool injection ~12.7k +
+> history compress ~10.5k + distill). `aura stats` shows the same split live, per surface.
 
 ## ✦ Commands
 
@@ -111,6 +152,34 @@ aura learn-sessions --min-repeat 5  # require 5 repeats before a prompt becomes 
 
 It's **dry-run by default** — nothing is written until you pass `--apply`. Best results come from support/FAQ/knowledge-style histories. Undo anytime with `aura clear`.
 
+## ✦ Tool injection — send only the tools this turn needs
+
+The overlooked drain: a 40-tool agent ships **~1,600 tokens of JSON tool schema on every
+call** — even when the user just said *"thanks."* Most turns use two or three tools. AURA
+scores each tool's name + description + parameters against the current prompt (BM25, the same
+zero-dep index behind fuzzy cache) and sends only the relevant few.
+
+```js
+const aura = require('shaddai-aura');
+
+const { tools, report } = aura.selectTools(userPrompt, allTools, { k: 6 });
+// pass `tools` to the model instead of `allTools`
+// report → { total: 40, sent: 5, savedTokens: 1444, dropped: [...], scores: [...] }
+```
+
+**Context-aware:** pass the whole message array (`selectTools(messages, tools)`) and a terse
+follow-up like *"yes, do it"* still resolves the right tool from the recent conversation — so you
+can trim aggressively without a short reply breaking the turn. A plain prompt string works too.
+
+Works with **both OpenAI** (`{type:'function',function:{…}}`) **and Anthropic** (`{name,input_schema}`)
+tool shapes. Tune with `k` (max tools), `alwaysInclude` (criticals that don't verbalize well),
+`contextWindow`, and `minPool`.
+
+**The safety guarantee — it fails open.** If the prompt shares no vocabulary with any tool, or
+the toolbox is tiny, or nothing scores, AURA sends **everything** rather than risk starving the
+model of a tool it needed. You opt into aggressiveness; you never silently lose a tool. Every
+decision is reported. Run `npm run bench` to see it on a realistic 40-tool agent (**~82% cut**).
+
 ## ✦ Distill — trim bloated system prompts
 
 A system prompt is paid for on **every call, forever.** OpenAI's GPT-5.6 guidance is blunt
@@ -174,15 +243,15 @@ It exposes six zero-dependency tools:
 
 | Path | What it does |
 |------|--------------|
-| **CACHE** | bounded TTL cache of prior answers |
-| **COMPUTE** | deterministic math/logic answered locally |
-| **SEED / QUERY** | seeded facts + structured lookups |
-| **SKILL / RECIPE** | author-defined skills run without the model |
-| **COMPRESS** | shrink the conversation history before each turn |
+| **TOOL INJECTION** | send only the tools this prompt needs, not all 40 — the biggest per-call win (~82% of tool-schema tokens), fails open so a needed tool is never dropped |
+| **COMPRESS** | shrink the conversation history before each turn (dedup re-read files, collapse repeated log/retry lines, truncate stale tool dumps) |
 | **DISTILL** | trim redundant instructions from the prompt/system-prompt itself |
+| **CACHE / QUERY** | bounded TTL cache of prior answers + fuzzy paraphrase hits |
+| **SKILL / RECIPE** | author-defined skills run without the model |
+| **COMPUTE** | deterministic locally-computed answers — math, %, unit/temp conversion, dates, hashing, base conversion, color, etc. (a bonus fast-path, not the headline) |
 
-AURA saves on all three surfaces: the **answer** (cache/compute/skill), the **history**
-(compress), and the **instructions** (distill).
+AURA saves on **four surfaces of every call**: the **tools** (inject), the **history**
+(compress), the **instructions** (distill), and repeat **answers** (cache/compute/skill).
 
 Core audited safe: no `eval` / `Function` / `child_process` / shell, bounded cache, zero deps.
 

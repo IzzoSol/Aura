@@ -52,6 +52,57 @@ test('dedups an identical large block, keeping the LATER full copy', () => {
   assert.strictEqual(messages[4].content, shared, 'later copy kept in full');
 });
 
+test('near-dedup: elides an OLDER near-identical file re-read, keeps the later full copy', () => {
+  const fileV1 = Array.from({ length: 20 }, (_, i) => `const item${i} = ${i};`).join('\n');
+  const fileV2 = fileV1.replace('const item5 = 5;', 'const item5 = 500;'); // 1 of 20 lines changed → ~90% same
+  const msgs = [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'task' },
+    { role: 'assistant', content: fileV1 },   // first read (stale) -> should be elided
+    { role: 'user', content: 'edit item5' },
+    { role: 'assistant', content: fileV2 },   // second read (current) -> kept full
+    { role: 'user', content: 'r1' },
+    { role: 'assistant', content: 'r2' }
+  ];
+  const { messages, stats } = compress(msgs, { keepRecent: 2, dedupOver: 100 });
+  assert.ok(/identical to a later message/.test(messages[2].content), 'stale re-read elided');
+  assert.strictEqual(messages[4].content, fileV2, 'current copy kept in full');
+  assert.ok(stats.saved > 0);
+});
+
+test('near-dedup: two GENUINELY DIFFERENT large blocks are both kept (no false collapse)', () => {
+  const a = Array.from({ length: 20 }, (_, i) => `alpha config key_${i} = ${i}`).join('\n');
+  const b = Array.from({ length: 20 }, (_, i) => `beta handler route /path/${i} -> fn${i}()`).join('\n');
+  const msgs = [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'task' },
+    { role: 'assistant', content: a },
+    { role: 'user', content: 'next' },
+    { role: 'assistant', content: b },
+    { role: 'user', content: 'r1' },
+    { role: 'assistant', content: 'r2' }
+  ];
+  const { messages } = compress(msgs, { keepRecent: 2, dedupOver: 100 });
+  assert.strictEqual(messages[2].content, a, 'different block A untouched');
+  assert.strictEqual(messages[4].content, b, 'different block B untouched');
+});
+
+test('near-dedup can be disabled with nearDedup:false', () => {
+  const fileV1 = Array.from({ length: 20 }, (_, i) => `const item${i} = ${i};`).join('\n');
+  const fileV2 = fileV1.replace('const item5 = 5;', 'const item5 = 500;');
+  const msgs = [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'task' },
+    { role: 'assistant', content: fileV1 },
+    { role: 'user', content: 'x' },
+    { role: 'assistant', content: fileV2 },
+    { role: 'user', content: 'r1' },
+    { role: 'assistant', content: 'r2' }
+  ];
+  const { messages } = compress(msgs, { keepRecent: 2, dedupOver: 100, nearDedup: false });
+  assert.strictEqual(messages[2].content, fileV1, 'near-dedup off → stale copy retained');
+});
+
 test('maxTokens drops oldest non-pinned and leaves a marker', () => {
   const msgs = [
     { role: 'system', content: 'sys' },
@@ -69,6 +120,38 @@ test('maxTokens drops oldest non-pinned and leaves a marker', () => {
   assert.strictEqual(messages[0].content, 'sys');
   assert.strictEqual(messages[1].content, 'task');
   assert.strictEqual(messages[messages.length - 1].content, 'recent-a');
+});
+
+test('collapses runs of repeated identical lines in a big old block (smarter than truncation)', () => {
+  const spam = Array.from({ length: 40 }, () => 'ERROR: timeout while connecting to upstream').join('\n');
+  const msgs = [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'task' },
+    { role: 'assistant', content: spam },   // old, unpinned, ~1720 chars of one repeated line
+    { role: 'user', content: 'q1' },
+    { role: 'assistant', content: 'a1' },
+  ];
+  const { messages, stats } = compress(msgs, { keepRecent: 2, truncateOver: 1000 });
+  const t = messages[2].content;
+  assert.match(t, /repeated 40×/, 'run collapsed with a count marker');
+  assert.match(t, /ERROR: timeout while connecting/, 'the line itself is kept once');
+  assert.doesNotMatch(t, /AURA elided \d+ chars/, 'no blind head/tail cut needed — collapse fit it');
+  assert.ok(stats.saved > 0);
+});
+
+test('repeat-collapse can be disabled and does not touch a non-repeating block', () => {
+  const varied = Array.from({ length: 40 }, (_, i) => `line ${i}: distinct content value ${i * 7}`).join('\n');
+  const msgs = [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'task' },
+    { role: 'assistant', content: varied },
+    { role: 'user', content: 'q1' },
+    { role: 'assistant', content: 'a1' },
+  ];
+  const off = compress(msgs.map((m) => ({ ...m })), { keepRecent: 2, truncateOver: 1000, collapseRepeats: false });
+  assert.doesNotMatch(off.messages[2].content, /repeated \d+×/, 'disabled → no collapse');
+  const on = compress(msgs.map((m) => ({ ...m })), { keepRecent: 2, truncateOver: 1000 });
+  assert.doesNotMatch(on.messages[2].content, /repeated \d+×/, 'non-repeating block is never collapsed');
 });
 
 test('a small conversation under budget is returned unchanged', () => {

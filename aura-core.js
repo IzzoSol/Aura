@@ -23,6 +23,10 @@ const os = require('os');
 const crypto = require('crypto');
 const { validateSkill, isRegexSafe } = require('./lib/validate-skill');
 const searchIndex = require('./lib/search-index');
+const { computeExtra } = require('./lib/compute-ops');
+const toolSelect = require('./lib/tool-select');
+const contextCompress = require('./lib/context-compress');
+const promptDistill = require('./lib/prompt-distill');
 
 // --------------------------------------------------------------------------- config
 const DATA_DIR    = process.env.AURA_HOME || path.join(os.homedir(), '.shaddai-aura');
@@ -42,13 +46,24 @@ function readJson(file, fb) { try { return JSON.parse(fs.readFileSync(file, 'utf
 function writeJson(file, obj) { try { ensureDir(); fs.writeFileSync(file, JSON.stringify(obj, null, 2)); return true; } catch (_) { return false; } }
 
 // --------------------------------------------------------------------------- stats
+const METHODS = ['fetch', 'query', 'skill', 'compute', 'distill', 'toolInject', 'compress'];
 function loadStats() {
-  const s = readJson(STATS_FILE, { hits: 0, misses: 0, tokensSaved: 0, byMethod: { fetch: 0, query: 0, skill: 0, compute: 0, distill: 0 } });
-  // back-fill byMethod.skill on stats files created before Stage 2
-  if (s && s.byMethod && typeof s.byMethod.skill !== 'number') s.byMethod.skill = 0;
+  const s = readJson(STATS_FILE, { hits: 0, misses: 0, tokensSaved: 0, byMethod: {}, tokensByMethod: {} });
+  // back-fill any missing method buckets (older stats files predate some surfaces)
+  if (!s.byMethod || typeof s.byMethod !== 'object') s.byMethod = {};
+  if (!s.tokensByMethod || typeof s.tokensByMethod !== 'object') s.tokensByMethod = {};
+  for (const m of METHODS) { if (typeof s.byMethod[m] !== 'number') s.byMethod[m] = 0; if (typeof s.tokensByMethod[m] !== 'number') s.tokensByMethod[m] = 0; }
   return s;
 }
 function bumpStats(mut) { try { const s = loadStats(); mut(s); writeJson(STATS_FILE, s); } catch (_) {} }
+// Record a hit's token savings against BOTH the running total and its surface subtotal, so
+// stats() can show exactly how much each saver (tools/history/instructions/cache/…) earned.
+function addSaved(s, method, tokens) {
+  const n = Math.round(Number(tokens) || 0);
+  s.tokensSaved += n;
+  if (!s.tokensByMethod) s.tokensByMethod = {};
+  s.tokensByMethod[method] = (s.tokensByMethod[method] || 0) + n;
+}
 function estTokens(str) { return Math.max(1, Math.ceil(String(str || '').length / CHARS_PER_TOK)); }
 
 // --------------------------------------------------------------------------- normalize + sim
@@ -271,6 +286,7 @@ function compute(prompt) {
   const pch = percentChange(raw);  if (pch !== null) return pch;
   const dbt = daysBetween(raw);    if (dbt !== null) return dbt;
   const conv = convertUnits(raw);  if (conv !== null) return conv;
+  const ext = computeExtra(raw);   if (ext !== null) return ext;   // base/hash/url/rot13/case/color
   let mathSrc = raw
     .replace(/^\s*(what(?:'s| is)|calculate|compute|solve|eval(?:uate)?|how much is)\b/i, '')
     .replace(/[?=]/g, '')
@@ -293,7 +309,7 @@ function route(prompt, opts = {}) {
     const exact = cache[key];
     if (exact && (exact.ts + (exact.ttl || DEFAULT_TTL_MS)) >= Date.now()) {
       const saved = estTokens(p) + estTokens(exact.answer);
-      bumpStats((s) => { s.hits++; s.byMethod.fetch++; s.tokensSaved += saved; });
+      bumpStats((s) => { s.hits++; s.byMethod.fetch++; addSaved(s, "fetch", saved); });
       return { hit: true, method: 'fetch', answer: exact.answer, savedTokensEst: saved };
     }
     // FUZZY candidate lookup — was an O(N) cosineSim scan over the WHOLE cache (dies at
@@ -316,14 +332,14 @@ function route(prompt, opts = {}) {
     const skill = matchSkill(p);
     if (skill && !skill.adapter) {
       const saved = estTokens(p) + estTokens(skill.text);
-      bumpStats((s) => { s.hits++; s.byMethod.skill++; s.tokensSaved += saved; });
+      bumpStats((s) => { s.hits++; s.byMethod.skill++; addSaved(s, "skill", saved); });
       return { hit: true, method: 'skill', answer: skill.text, savedTokensEst: saved, skill: skill.name };
     }
 
     const computed = compute(p);
     if (computed !== null) {
       const saved = estTokens(p) + estTokens(computed);
-      bumpStats((s) => { s.hits++; s.byMethod.compute++; s.tokensSaved += saved; });
+      bumpStats((s) => { s.hits++; s.byMethod.compute++; addSaved(s, "compute", saved); });
       try { recordAnswer(p, computed, opts); } catch (_) {}
       return { hit: true, method: 'compute', answer: computed, savedTokensEst: saved };
     }
@@ -331,7 +347,7 @@ function route(prompt, opts = {}) {
     // shadows a deterministic answer, but a real prior paraphrase is still free.
     if (best && bestSim >= SIM_THRESHOLD) {
       const saved = estTokens(p) + estTokens(best.answer);
-      bumpStats((s) => { s.hits++; s.byMethod.query++; s.tokensSaved += saved; });
+      bumpStats((s) => { s.hits++; s.byMethod.query++; addSaved(s, "query", saved); });
       return { hit: true, method: 'query', answer: best.answer, savedTokensEst: saved, similarity: Math.round(bestSim * 1000) / 1000 };
     }
     bumpStats((s) => { s.misses++; });
@@ -364,6 +380,8 @@ function stats() {
       tokensSaved: s.tokensSaved,
       costSavedUsd: Math.round(((s.tokensSaved / 1000) * COST_PER_1K) * 1e6) / 1e6,
       byMethod: s.byMethod,
+      tokensByMethod: s.tokensByMethod,
+      costByMethod: Object.fromEntries(METHODS.map((m) => [m, Math.round((((s.tokensByMethod[m] || 0) / 1000) * COST_PER_1K) * 1e6) / 1e6])),
       cacheFile: CACHE_FILE
     };
   } catch (_) {
@@ -378,7 +396,127 @@ function clearCache() { return writeJson(CACHE_FILE, {}); }
 function recordDistill(saved) {
   const n = Number(saved);
   if (!Number.isFinite(n) || n <= 0) return false;
-  try { bumpStats((s) => { s.byMethod.distill = (s.byMethod.distill || 0) + 1; s.tokensSaved += Math.round(n); }); return true; } catch (_) { return false; }
+  try { bumpStats((s) => { s.byMethod.distill = (s.byMethod.distill || 0) + 1; addSaved(s, "distill", n); }); return true; } catch (_) { return false; }
+}
+
+// Selective tool injection (per-call saver): send only the tools relevant to this prompt.
+// Thin wrapper over lib/tool-select that also books the savings into the shared ledger.
+function selectTools(prompt, tools, opts) {
+  const r = toolSelect.selectTools(prompt, tools, opts);
+  try {
+    const saved = r && r.report && Number(r.report.savedTokens);
+    if (Number.isFinite(saved) && saved > 0) {
+      bumpStats((s) => { s.byMethod.toolInject = (s.byMethod.toolInject || 0) + 1; addSaved(s, 'toolInject', saved); });
+    }
+  } catch (_) {}
+  return r;
+}
+
+// =========================================================================== OPTIMIZE (one-call)
+// The drop-in pre-processor: run all three per-call savers on a full request object —
+// select the tools this turn needs, distill the system prompt, compress the history — and
+// return a NEW request ready to send (never mutates the caller's object). Each surface can
+// be turned off or tuned via opts.{tools,distill,compress}: false | {options}.
+// Tokens of a system prompt in any accepted shape (string, or Anthropic block array).
+function _systemTokens(system) {
+  if (typeof system === 'string') return estTokens(system);
+  if (Array.isArray(system)) { let t = 0; for (const b of system) if (b && typeof b.text === 'string') t += estTokens(b.text); return t; }
+  return 0;
+}
+// Content-based token estimate of a whole request (system + tools JSON + each message's
+// content) — the SAME metric compress uses, so the budget verdict is consistent.
+function _requestTokens(req) {
+  let t = _systemTokens(req.system);
+  if (Array.isArray(req.tools)) t += estTokens(JSON.stringify(req.tools));
+  if (Array.isArray(req.messages)) for (const m of req.messages) t += estTokens(contextCompress.contentString(m && m.content));
+  return t;
+}
+
+function optimize(request, opts = {}) {
+  opts = opts || {};
+  const req = (request && typeof request === 'object') ? Object.assign({}, request) : {};
+  const report = { tools: null, instructions: null, history: null, tokensSaved: 0 };
+  let saved = 0;
+
+  // 1. TOOLS — send only the tools relevant to the latest user turn
+  if (Array.isArray(req.tools) && req.tools.length && opts.tools !== false) {
+    // pass the whole message array so a terse follow-up still resolves the right tools (context-aware)
+    const r = toolSelect.selectTools(Array.isArray(req.messages) ? req.messages : [], req.tools, opts.tools || {});
+    req.tools = r.tools;
+    report.tools = { total: r.report.total, sent: r.report.sent, saved: r.report.savedTokens || 0 };
+    saved += r.report.savedTokens || 0;
+  }
+
+  // 2. INSTRUCTIONS — distill the system prompt. Handles all three real shapes: a plain
+  //    string (Anthropic), an array of content blocks (Anthropic, cache_control preserved),
+  //    or a `system` role message (OpenAI). Distilling the system prompt is the highest-value
+  //    cut because it is paid for on every call.
+  if (opts.distill !== false) {
+    if (typeof req.system === 'string' && req.system.trim()) {
+      const d = promptDistill.distill(req.system, opts.distill || {});
+      req.system = d.distilled;
+      report.instructions = { saved: d.report.stats.saved, savedPct: d.report.stats.savedPct, removed: d.report.removed.length };
+      saved += d.report.stats.saved || 0;
+    } else if (Array.isArray(req.system) && req.system.length) {
+      // Anthropic block array: distill each text block IN PLACE so structure + cache_control survive.
+      req.system = req.system.map((b) => Object.assign({}, b));
+      let dSaved = 0, dRemoved = 0, dPct = 0, hit = false;
+      req.system.forEach((b) => {
+        if (b && typeof b.text === 'string' && b.text.trim()) {
+          const d = promptDistill.distill(b.text, opts.distill || {});
+          b.text = d.distilled; dSaved += d.report.stats.saved; dRemoved += d.report.removed.length; dPct = Math.max(dPct, d.report.stats.savedPct); hit = true;
+        }
+      });
+      if (hit) { report.instructions = { saved: dSaved, savedPct: dPct, removed: dRemoved }; saved += dSaved; }
+    } else if (Array.isArray(req.messages)) {
+      req.messages = req.messages.map((m) => Object.assign({}, m)); // clone before touching system content
+      let dSaved = 0, dRemoved = 0, dPct = 0, hit = false;
+      req.messages.forEach((m) => {
+        if (m.role === 'system' && typeof m.content === 'string' && m.content.trim()) {
+          const d = promptDistill.distill(m.content, opts.distill || {});
+          m.content = d.distilled; dSaved += d.report.stats.saved; dRemoved += d.report.removed.length; dPct = d.report.stats.savedPct; hit = true;
+        }
+      });
+      if (hit) { report.instructions = { saved: dSaved, savedPct: dPct, removed: dRemoved }; saved += dSaved; }
+    }
+  }
+
+  // 3. HISTORY — compress the message array (protects system/task/recent, dedups re-reads).
+  //    If a whole-request maxTokens budget is set, derive a history budget (total minus the
+  //    system + tools overhead) so compression drops enough to make the WHOLE request fit.
+  if (Array.isArray(req.messages) && req.messages.length && opts.compress !== false) {
+    const compressOpts = Object.assign({}, opts.compress || {});
+    if (Number(opts.maxTokens) > 0) {
+      const overhead = _systemTokens(req.system) +
+        (Array.isArray(req.tools) ? estTokens(JSON.stringify(req.tools)) : 0);
+      const historyBudget = Math.max(50, Math.round(Number(opts.maxTokens) - overhead));
+      compressOpts.maxTokens = Number(compressOpts.maxTokens) > 0 ? Math.min(compressOpts.maxTokens, historyBudget) : historyBudget;
+    }
+    const c = contextCompress.compress(req.messages, compressOpts);
+    req.messages = c.messages;
+    report.history = {
+      messagesBefore: (request && Array.isArray(request.messages) ? request.messages.length : 0),
+      messagesAfter: c.messages.length, saved: c.stats.saved, elided: c.stats.elided, dropped: c.stats.dropped,
+    };
+    saved += c.stats.saved || 0;
+  }
+
+  report.tokensSaved = Math.round(saved);
+  // whole-request budget verdict — measured the same (content-based) way compress counts, so
+  // `fit` is reliable: true means the returned request is guaranteed at/under maxTokens.
+  if (Number(opts.maxTokens) > 0) {
+    const finalTokens = _requestTokens(req);
+    report.budget = { limit: Math.round(Number(opts.maxTokens)), finalTokens, fit: finalTokens <= Number(opts.maxTokens) };
+  }
+  try {
+    bumpStats((s) => {
+      if (report.tools && report.tools.saved > 0) { s.byMethod.toolInject = (s.byMethod.toolInject || 0) + 1; addSaved(s, 'toolInject', report.tools.saved); }
+      if (report.instructions && report.instructions.saved > 0) { s.byMethod.distill = (s.byMethod.distill || 0) + 1; addSaved(s, 'distill', report.instructions.saved); }
+      if (report.history && report.history.saved > 0) { s.byMethod.compress = (s.byMethod.compress || 0) + 1; addSaved(s, 'compress', report.history.saved); }
+    });
+  } catch (_) {}
+
+  return { request: req, report };
 }
 
 // =========================================================================== SKILLS REGISTRY (Stage 2)
@@ -685,7 +823,7 @@ async function ask(prompt, opts = {}) {
       const ans = await runAdapter(sk.action.adapter, sk.action.args, sk.match);
       if (ans !== null) {
         const saved = estTokens(prompt) + estTokens(ans);
-        bumpStats((s) => { s.hits++; s.byMethod.skill++; s.tokensSaved += saved; });
+        bumpStats((s) => { s.hits++; s.byMethod.skill++; addSaved(s, "skill", saved); });
         try { recordAnswer(prompt, ans, opts); } catch (_) {}
         return { hit: true, method: 'skill', answer: ans, savedTokensEst: saved, skill: sk.name, source: 'aura' };
       }
@@ -700,7 +838,9 @@ async function ask(prompt, opts = {}) {
 }
 
 module.exports = {
-  route, recordAnswer, recordDistill, stats, clearCache, ask, askLLM, compute, cosineSim, classifyTier, pickModel,
+  route, recordAnswer, recordDistill, selectTools, optimize, stats, clearCache, ask, askLLM, compute, cosineSim, classifyTier, pickModel,
+  // context-optimizer surfaces (also usable standalone)
+  distill: promptDistill.distill, compress: contextCompress.compress,
   // Stage 2 — saved-skills registry
   addSkill, listSkills, removeSkill, matchSkill, runAdapter, ADAPTERS,
   // Phase 1 — schema validation

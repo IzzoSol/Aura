@@ -17,6 +17,15 @@ function bigToolOutput(turn) {
   return `[tool result @ turn ${turn}]\n` + 'line of output data '.repeat(120);
 }
 
+// A realistic multi-line source file the agent keeps RE-READING as it edits — the exact
+// pattern near-dedup targets. Each re-read changes ~2 lines, so exact-hash dedup misses it,
+// yet every stale copy is otherwise re-sent on every future turn.
+function fileReRead(edits) {
+  const lines = Array.from({ length: 40 }, (_, i) => `  const handler${i} = (req, res) => res.send(${i});`);
+  for (let e = 0; e <= edits; e++) { const k = (e * 3) % 40; lines[k] = `  const handler${k} = (req, res) => res.json({ v: ${100 + e} });`; }
+  return `// src/routes.js  (read #${edits + 1})\nexport function routes(app) {\n${lines.join('\n')}\n}\n`;
+}
+
 function run() {
   const TURNS = 40;
   const history = [
@@ -31,6 +40,8 @@ function run() {
     // the agent works: reads/produces output, occasionally a big tool dump
     history.push({ role: 'assistant', content: `Step ${t}: analyzing and making a change.` });
     if (t % 2 === 0) history.push({ role: 'user', content: bigToolOutput(t) }); // tool result fed back
+    // every 5th turn the agent re-reads the same source file after editing it (near-dup re-read)
+    if (t % 5 === 0) history.push({ role: 'user', content: fileReRead(t / 5) });
     history.push({ role: 'user', content: `Continue with step ${t + 1}.` });
 
     // WITHOUT compression: the model re-reads the entire history this turn

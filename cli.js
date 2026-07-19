@@ -62,9 +62,17 @@ ${C.d}LLM fallback runs only with --llm AND a provider key set in your environme
 function fmtStats(s) {
   out(`${C.b}AURA savings${C.x}`);
   out(`  hits        ${C.g}${s.hits}${C.x}   misses ${s.misses}   hit-rate ${C.c}${(s.hitRate * 100).toFixed(1)}%${C.x}`);
-  out(`  tokens saved ${C.g}${s.tokensSaved.toLocaleString()}${C.x}`);
-  out(`  cost saved   ${C.y}$${s.costSavedUsd.toFixed(6)}${C.x}`);
-  out(`  by method    fetch ${s.byMethod.fetch} · query ${s.byMethod.query} · skill ${s.byMethod.skill || 0} · compute ${s.byMethod.compute}`);
+  out(`  tokens saved ${C.g}${s.tokensSaved.toLocaleString()}${C.x}   cost saved ${C.y}$${s.costSavedUsd.toFixed(6)}${C.x}`);
+  // per-surface breakdown: where the savings actually came from (tokens + $ each)
+  const tbm = s.tokensByMethod || {}, cbm = s.costByMethod || {}, bm = s.byMethod || {};
+  const LABEL = { toolInject: 'tool injection', compress: 'history compress', distill: 'distill', fetch: 'cache (exact)', query: 'cache (fuzzy)', skill: 'skills', compute: 'compute' };
+  const rows = Object.keys(LABEL).filter((m) => (tbm[m] || 0) > 0 || (bm[m] || 0) > 0).sort((a, b) => (tbm[b] || 0) - (tbm[a] || 0));
+  if (rows.length) {
+    out(`  ${C.d}by surface:${C.x}`);
+    for (const m of rows) {
+      out(`    ${LABEL[m].padEnd(18)} ${C.g}${(tbm[m] || 0).toLocaleString().padStart(12)}${C.x} tok  ${C.y}$${(cbm[m] || 0).toFixed(6)}${C.x}  ${C.d}(${bm[m] || 0}×)${C.x}`);
+    }
+  }
   out(`  ${C.d}cache: ${s.cacheFile}${C.x}`);
 }
 
