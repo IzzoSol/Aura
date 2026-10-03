@@ -3,6 +3,33 @@
 All notable changes to **shaddai-aura** (AURA). Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semver.
 
+## [0.7.2] — 2026-10-02
+
+Quality sweep release — every tool driven with realistic payloads end-to-end over real
+stdio JSON-RPC, and what the sweep taught us, shipped.
+
+### Added
+- **`npm run verify:mcp`** (`mcp-sweep.js`) — the one-command health check: all 9 tools
+  + the savings resource driven over the REAL protocol with realistic payloads, checking
+  result QUALITY (right answer, right protection, right savings, ledger consistency,
+  on-disk persistence, secret screen), 27 checks, exit 0 only when all pass.
+- **Light stemming in the fuzzy path** — `capitals→capital`, `cities→city`,
+  `caching/cached→cach` (Marktechpost's measured stemmer rules). Applied ONLY to fuzzy
+  similarity tokens, never to `hashKey`, so the exact cache is never invalidated.
+  A plural paraphrase ("what are the capitals of France") now hits a cached singular
+  ("what is the capital of France"). Mirrored exactly in `lib/search-index.js` so BM25
+  candidates and the cosine gate stay in lockstep (pinned by tests).
+
+### Notes from the sweep (behaviors verified as BY DESIGN, not bugs)
+- A diluted paraphrase ("capital city of France, the country" → cos 0.707) still misses
+  under the 0.82 threshold — conservative by design; the miss note routes the agent to
+  answer + `aura_remember`.
+- `aura_distill` keeps BOTH copies of a protected rule (e.g. "always cite your sources"
+  matches the envelope keyword `cite`) — protection outranks dedup, even duplicated.
+- `aura_optimize` reports `fit:false` honestly when the budget is genuinely impossible
+  (protected recent window holds a huge tool dump) — it never drops the protected core
+  to hit a number.
+
 ## [0.7.1] — 2026-10-02
 
 MCP server audit + protocol hardening pass. **198/198 tests green.**

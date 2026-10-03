@@ -1,10 +1,25 @@
-# AURA HANDOFF — 2026-10-02 (v0.7.1 shipped)
+# AURA HANDOFF — 2026-10-02 (v0.7.2 shipped)
 
 Pick up here. Everything below is the verified state of the world + what's next.
 
 ---
 
-## 0. Latest: v0.7.1 (audit + protocol hardening)
+## 0. Latest: v0.7.2 (quality sweep release)
+
+Every tool driven with realistic payloads over the real stdio protocol; sweep findings
+shipped. **199/199 tests + 27/27 protocol sweep — ALL GREEN.**
+
+- **`npm run verify:mcp`** (`mcp-sweep.js`) — permanent one-command health check for
+  all 9 tools + the savings resource: quality checks on every result, ledger
+  consistency, on-disk persistence, secret screen, 27 checks total.
+- **Light stemming in the fuzzy path** — "capitals of France" now hits a cached
+  "capital of France"; never applied to hashKey (exact cache unaffected); mirrored in
+  lib/search-index.js so candidates and the cosine gate stay in lockstep.
+- Sweep verified as BY DESIGN (documented in CHANGELOG): diluted paraphrases still
+  miss under 0.82; protected rules stay even when duplicated; optimize reports fit:false
+  honestly instead of dropping the protected core.
+
+## 0b. v0.7.1 (audit + protocol hardening)
 
 Full security audit + MCP protocol polish on top of 0.7.0. **198/198 tests green.**
 

@@ -83,14 +83,29 @@ test('search-index: deterministic across repeated calls', () => {
   assert.deepStrictEqual(r1, r2);
 });
 
-test('search-index: shares tokenization with aura-core (same simToks)', () => {
-  // stopword stripping + fallback behavior must match the core's fuzzy path
-  assert.deepStrictEqual(SI.simToks("what's the capital of france"), ['capital', 'france']);
-  assert.deepStrictEqual(SI.simToks('the is of'), ['the', 'is', 'of']); // all-stopword fallback
-});
+  test('search-index: shares tokenization with aura-core (same simToks)', () => {
+    // stopword stripping + fallback behavior must match the core's fuzzy path
+    assert.deepStrictEqual(SI.simToks("what's the capital of france"), ['capital', 'france']);
+    assert.deepStrictEqual(SI.simToks('the is of'), ['the', 'is', 'of']); // all-stopword fallback
+    // light stemming (fuzzy path only — hashKey/normalize untouched)
+    assert.deepStrictEqual(SI.simToks('what are the capitals of france'), ['capital', 'france'], 'plural stems to singular');
+    assert.deepStrictEqual(SI.simToks('show me the cities in germany'), ['city', 'germany'], 'ies -> y');
+    assert.deepStrictEqual(SI.simToks('how does caching work'), ['does', 'cach', 'work'], 'ing stripped; unifies with cached->cach');
+    assert.deepStrictEqual(SI.simToks('the running total'), ['runn', 'total'], 'ing stem is consistent (lockstep matters more than linguistics)');
+    assert.deepStrictEqual(SI.simToks('my process'), ['process'], 'ss never stripped');
+    assert.deepStrictEqual(SI.simToks('cat'), ['cat'], 'short words untouched');
+  });
 
-// --- integration with route() ------------------------------------------------
-test('route: index-backed fuzzy query still hits (semantics preserved)', () => {
+  test('route: plural paraphrase hits after stemming (capitals -> capital)', () => {
+    A.recordAnswer('what is the capital of france', 'Paris');
+    const r = A.route('what are the capitals of France');
+    assert.ok(r.hit, 'stemmed plural matches the singular entry');
+    assert.strictEqual(r.method, 'query');
+    assert.strictEqual(r.answer, 'Paris');
+  });
+
+  // --- integration with route() ------------------------------------------------
+  test('route: index-backed fuzzy query still hits (semantics preserved)', () => {
   A.recordAnswer('what is the capital of france', 'Paris');
   const r = A.route('what is the capital of France?');
   assert.strictEqual(r.hit, true);

@@ -85,10 +85,21 @@ function toks(s) { return normalize(s).split(' ').filter(Boolean); }
 // dominate similarity — "what's the X?" then matches a cached "X". Falls back to raw tokens
 // if stripping would empty the prompt.
 const STOP = new Set(['a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'to', 'of', 'in', 'on', 'at', 'for', 'and', 'or', 'what', 'whats', 's', 'please', 'me', 'tell', 'give', 'do', 'you', 'can', 'how', 'i', 'my', 'it', 'this', 'that', 'with', 'about', 'show']);
+// Light stemmer (applied ONLY in the fuzzy path — never to hashKey, so the exact cache
+// is never invalidated). Unifies word FORMS: capitals→capital, cities→city, running→runn.
+// Same rules as lib/search-index.js — the two tokenizers must stay in lockstep or index
+// candidates and cosine confirmation diverge.
+function stem(t) {
+  if (t.length > 4 && t.endsWith('ies')) return t.slice(0, -3) + 'y';
+  if (t.length > 5 && t.endsWith('ing')) return t.slice(0, -3);
+  if (t.length > 4 && t.endsWith('ed')) return t.slice(0, -2);
+  if (t.length > 4 && t.endsWith('s') && !t.endsWith('ss')) return t.slice(0, -1);
+  return t;
+}
 function simToks(s) {
   const all = toks(s);
-  const kept = all.filter(t => !STOP.has(t));
-  return kept.length ? kept : all;
+  const kept = all.filter((t) => !STOP.has(t)).map(stem);
+  return kept.length ? kept : all.map(stem);
 }
 function cosineSim(a, b) {
   const ta = simToks(a), tb = simToks(b);
