@@ -90,3 +90,21 @@ test('trimOutput is exported from the core facade', () => {
   const r = A.trimOutput({ name: 'npm install', output: ('dep\n').repeat(200) + 'added 3 packages\n' });
   assert.ok(r.report && typeof r.report.tokensSaved === 'number');
 });
+
+test('REGRESSION: the shared secret screen is LINEAR on huge uniform values (was a P0 ReDoS)', () => {
+  const hostile = [
+    'x'.repeat(400000),                                  // uniform letters (old conn-string regex: quadratic)
+    ('ab ').repeat(130000),                              // many word boundaries + lookaheads
+    'E' + 'A'.repeat(400000),                            // errno-token flood
+    'postgres://admin:s3cretpw@db.host:5432/prod ' + 'x'.repeat(400000) // real secret + 400KB tail
+  ];
+  const t0 = Date.now();
+  for (const h of hostile) {
+    const r = A.remember('screen this output', h);
+    assert.ok(r && typeof r.ok === 'boolean', 'returned safely');
+  }
+  const dt = Date.now() - t0;
+  assert.ok(dt < 2000, `4 hostile 400KB screens completed in ${dt}ms (< 2s)`);
+  // behavior preserved: the real conn string must still be refused
+  assert.strictEqual(A.remember('conn', 'postgres://admin:supersecret@db.internal:5432/prod').reason, 'secret-detected');
+});

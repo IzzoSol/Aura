@@ -93,6 +93,23 @@ test('trimOutput: never throws on hostile input', () => {
   assert.ok(r1 && r2 && r3, 'all returned safely');
 });
 
+test('trimOutput: 200KB pathological inputs finish fast (ReDoS screen)', () => {
+  const hostile = [
+    'E' + 'A'.repeat(200000),                                  // errno-token lookalike flood
+    ('\x1b[31;1m' + 'x'.repeat(2000) + '\x1b[0m\n').repeat(100), // ANSI flood
+    ('row '.repeat(50) + '\n').repeat(4000),                   // many lines, no criticals
+    'npm install\n' + ('0123456789'.repeat(20000)),            // giant single line under a family
+    ('FAILED test_x - ' + 'y'.repeat(400) + '\n').repeat(300)  // repeated critical lines
+  ];
+  const t0 = Date.now();
+  for (const h of hostile) {
+    const r = trimOutput({ name: 'npm install', output: h });
+    assert.ok(r && r.report, 'returned safely');
+  }
+  const dt = Date.now() - t0;
+  assert.ok(dt < 2000, `all hostile inputs processed in ${dt}ms (< 2s)`);
+});
+
 test('recordOutputTrim books the shared ledger under outputTrim', () => {
   const before = A.stats().tokensSaved;
   const r = trimOutput({ name: 'npm install', output: fakeInstall() });

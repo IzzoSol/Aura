@@ -6,7 +6,7 @@
 // can answer recurring prompts for FREE (cache / saved skills / deterministic
 // compute) BEFORE spending model tokens.
 //
-// Run:  aura-mcp     (after `npm i -g @shaddai/aura`)
+// Run:  aura-mcp     (after `npm i -g shaddai-aura`)
 //   or:  node mcp.js
 // ============================================================
 const aura = require('./aura-core');
@@ -30,6 +30,19 @@ const MAX_ANSWER = 200000;
 const MAX_MESSAGES = 2000;         // hard cap on how many messages we accept
 const MAX_MSG_CONTENT = 200000;    // per-message content clip (chars)
 function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) : s; }
+// Bound content in EITHER shape: strings are clipped directly; block arrays / objects
+// are bounded by their serialized length (audit finding: non-string content otherwise
+// bypasses the clip and a 2000-message conversation could carry megabytes per message
+// into compress/optimize). Oversized non-string content degrades to a placeholder.
+const MAX_NONSTRING_JSON = MAX_MSG_CONTENT * 2;
+function boundContent(content) {
+  if (typeof content === 'string') return clip(content, MAX_MSG_CONTENT);
+  try {
+    const j = JSON.stringify(content);
+    if (typeof j === 'string' && j.length <= MAX_NONSTRING_JSON) return content;
+  } catch (_) {}
+  return '[AURA: oversized non-string content omitted]';
+}
 
 const TOOLS = [
   {
@@ -199,22 +212,20 @@ async function callTool(name, args) {
     return textResult({ ok: false, remembered: false, reason: r && r.reason });
   }
   if (name === 'aura_stats') {
-    return textResult(aura.stats());
+    return textResult(Object.assign({ version: PKG.version }, aura.stats()));
   }
   if (name === 'aura_compress') {
     // Guard malformed input WITHOUT throwing — return isError instead.
     if (!Array.isArray(args.messages)) {
       return Object.assign(textResult({ error: 'messages must be an array of {role, content}' }), { isError: true });
     }
-    // Cap count first, then clip each message's content — bound memory before compressing.
+    // Cap count first, then bound each message's content — memory is bounded before
+    // compression runs. Strings clip; block arrays are serialized-length bounded.
     const raw = args.messages.slice(0, MAX_MESSAGES);
     const safe = raw.map((m) => {
       m = m || {};
       const role = clip(m.role == null ? '' : m.role, 64);
-      // content may be a string or blocks; compress() handles both, but we clip the
-      // string form defensively. Non-string content is passed through (already bounded by count).
-      const content = typeof m.content === 'string' ? clip(m.content, MAX_MSG_CONTENT) : m.content;
-      return { role: role || 'user', content };
+      return { role: role || 'user', content: boundContent(m.content) };
     });
     const opts = {};
     if (Number.isInteger(args.keepRecent) && args.keepRecent >= 0) opts.keepRecent = args.keepRecent;
@@ -231,11 +242,8 @@ async function callTool(name, args) {
     return textResult({ distilled: res.distilled, report: res.report });
   }
   if (name === 'aura_savings') {
-    let answerCache = {};
-    try { answerCache = aura.stats(); } catch (_) { answerCache = { error: 'answer-cache stats unavailable' }; }
-    let toolCache = {};
-    try { toolCache = toolStats(); } catch (_) { toolCache = { error: 'tool-cache stats unavailable' }; }
-    return textResult({ answerCache, toolCache });
+    // single source of truth — the same payload the aura://savings resource serves
+    return textResult(savingsPayload());
   }
   if (name === 'aura_select_tools') {
     if (!Array.isArray(args.tools)) return Object.assign(textResult({ error: 'tools must be an array' }), { isError: true });
@@ -252,8 +260,7 @@ async function callTool(name, args) {
     if (typeof args.system === 'string') request.system = clip(args.system, MAX_ANSWER);
     if (Array.isArray(args.messages)) request.messages = args.messages.slice(0, MAX_MESSAGES).map((m) => {
       m = m || {};
-      const content = typeof m.content === 'string' ? clip(m.content, MAX_MSG_CONTENT) : m.content;
-      return { role: clip(m.role == null ? 'user' : m.role, 64) || 'user', content };
+      return { role: clip(m.role == null ? 'user' : m.role, 64) || 'user', content: boundContent(m.content) };
     });
     if (Array.isArray(args.tools)) request.tools = args.tools.slice(0, 500);
     const opts = {};
@@ -286,17 +293,37 @@ function savingsPayload() {
   let answerCache, toolCache;
   try { answerCache = aura.stats(); } catch (_) { answerCache = { error: 'answer-cache stats unavailable' }; }
   try { toolCache = toolStats(); } catch (_) { toolCache = { error: 'tool-cache stats unavailable' }; }
-  return { answerCache, toolCache };
+  return { version: PKG.version, answerCache, toolCache };
 }
+
+// Protocol versions this server is known-compatible with. If a client requests one of
+// these we echo it back; anything else (older or newer) falls back to the version we
+// were built against — per spec the server replies with the version it supports, it
+// must never blindly claim support for an unknown future revision.
+const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
+const DEFAULT_PROTOCOL = '2025-06-18';
+
+const SERVER_INSTRUCTIONS =
+  'AURA is a deterministic token saver. Call aura_ask BEFORE generating an answer ' +
+  '(cache/skills/compute may answer for free), aura_remember after writing a reusable ' +
+  'answer, aura_trim_output on noisy tool/command results, aura_compress on long ' +
+  'histories, aura_distill on bloated system prompts, and aura_optimize to do ' +
+  'tools+system+history in one call. Check aura_savings anytime to see what it saved.';
 
 async function handle(msg) {
   const { id, method, params } = msg || {};
   if (method === 'initialize') {
     const proto = params && params.protocolVersion;
+    const version = (typeof proto === 'string' && SUPPORTED_PROTOCOLS.has(proto)) ? proto : DEFAULT_PROTOCOL;
     return ok(id, {
-      protocolVersion: proto || '2024-11-05',
-      capabilities: { tools: {}, resources: {} },
-      serverInfo: { name: 'aura', version: PKG.version }
+      protocolVersion: version,
+      capabilities: {
+        tools: { listChanged: false },
+        resources: { subscribe: false, listChanged: false },
+        prompts: { listChanged: false }
+      },
+      serverInfo: { name: 'aura', version: PKG.version },
+      instructions: SERVER_INSTRUCTIONS
     });
   }
   if (method === 'notifications/initialized' || method === 'initialized') return; // notification, no reply
@@ -324,8 +351,18 @@ async function handle(msg) {
 }
 
 let buf = '';
+let draining = false; // set when a line exceeded the cap: discard until the next newline
+const MAX_LINE_BYTES = 64 * 1000 * 1000; // ~64MB — beyond any legitimate frame; abuse, not use
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
+  // Finish discarding an oversized line before touching the buffer: everything up
+  // to the next newline belongs to the dropped line.
+  if (draining) {
+    const ni = chunk.indexOf('\n');
+    if (ni === -1) return;           // still inside the giant line — drop the chunk
+    chunk = chunk.slice(ni + 1);     // resume parsing after it
+    draining = false;
+  }
   buf += chunk;
   let i;
   while ((i = buf.indexOf('\n')) >= 0) {
@@ -333,8 +370,27 @@ process.stdin.on('data', (chunk) => {
     buf = buf.slice(i + 1);
     if (!line) continue;
     let msg;
-    try { msg = JSON.parse(line); } catch (_) { continue; }
+    try { msg = JSON.parse(line); } catch (_) {
+      // JSON-RPC 2.0 §5.1: an unparseable message gets a Parse error (id: null).
+      send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+      continue;
+    }
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) {
+      // Not a valid request object (batching is deprecated; arrays are refused).
+      // A response is only possible when an id survived — otherwise it's dropped.
+      const rid = (msg && typeof msg === 'object' && !Array.isArray(msg) && msg.id !== undefined) ? msg.id : null;
+      if (rid !== null) send({ jsonrpc: '2.0', id: rid, error: { code: -32600, message: 'Invalid Request' } });
+      continue;
+    }
     handle(msg);
+  }
+  // Guard: a "line" with no newline that grows past the cap would otherwise consume
+  // unbounded memory. Emit one Parse error and drop the rest of that line; the server
+  // keeps serving subsequent frames.
+  if (buf.length > MAX_LINE_BYTES) {
+    send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error: line exceeds 64MB' } });
+    buf = '';
+    draining = true;
   }
 });
 process.stdin.on('end', () => process.exit(0));

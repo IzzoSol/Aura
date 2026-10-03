@@ -109,3 +109,36 @@ test('tool-cache: clearToolCache wipes stats AND disk', async () => {
   assert.strictEqual(disk.stats.misses, 0, 'stats zeroed');
   assert.strictEqual(Object.keys(disk.entries).length, 0, 'entries emptied');
 });
+
+test('tool-cache: SECRET-BEARING tool results never hit the disk (audit fix)', async () => {
+  const HOME = freshHome();
+  await runChild(`(async () => {
+    const { wrap, flush } = require('./lib/tool-cache');
+    const catEnv = wrap('read_file', async (a) => 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENGbPxRfiCYEXAMPLEKEY');
+    await catEnv({ path: '.env' });
+    const normal = wrap('read_file', async (a) => 'plain config text');
+    await normal({ path: 'config.json' });
+    flush(true);
+  })()`, HOME);
+  const file = path.join(HOME, 'aura-tool-cache.json');
+  const raw = fs.readFileSync(file, 'utf8');
+  assert.ok(!raw.includes('wJalrXUtnFEMI'), 'no secret material persisted');
+  assert.ok(!raw.includes('SECRET_ACCESS_KEY'), 'no secret key name persisted');
+  const disk = JSON.parse(raw);
+  assert.strictEqual(Object.keys(disk.entries).length, 1, 'only the clean entry persisted (secret stays memory-only)');
+});
+
+test('tool-cache: oversized values stay memory-only (no 1GB persist file)', async () => {
+  const HOME = freshHome();
+  await runChild(`(async () => {
+    const { wrap, flush } = require('./lib/tool-cache');
+    const dump = wrap('read_file', async (a) => 'x'.repeat(400 * 1000)); // 400KB — over the 100KB persist cap
+    await dump({ path: 'huge.log' });
+    flush(true);
+  })()`, HOME);
+  const file = path.join(HOME, 'aura-tool-cache.json');
+  const raw = fs.readFileSync(file, 'utf8');
+  assert.ok(raw.length < 150 * 1000, 'persist file stays small');
+  const disk = JSON.parse(raw);
+  assert.strictEqual(Object.keys(disk.entries).length, 0, 'oversized entry not persisted');
+});

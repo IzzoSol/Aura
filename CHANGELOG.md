@@ -3,6 +3,51 @@
 All notable changes to **shaddai-aura** (AURA). Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semver.
 
+## [0.7.1] — 2026-10-02
+
+MCP server audit + protocol hardening pass. **198/198 tests green.**
+
+### Fixed (security)
+- **P0 ReDoS in the shared secret screen** — the connection-string pattern
+  (`[a-z][a-z0-9+.-]*://…`) was catastrophic-quadratic on long uniform strings: a 400KB
+  tool result HUNG the process (~80 billion backtracks). Now the scheme prefix is bounded
+  (`{0,40}` — real schemes are <15 chars), making every secret pattern linear: 400KB
+  screens in ~20ms. Regression test pinned in `core-guards.test.js`. Found by putting
+  `hasSecret` on the tool-cache hot path — the new screen would have frozen any MCP
+  session that cached a big uniform value.
+- **Secret-bearing tool results never persist** — `lib/tool-cache.js` screens each cached
+  value at cache time; secret-bearing entries (a `cat .env` result, a token in a log) stay
+  memory-only for the process lifetime instead of being written to the plaintext
+  `aura-tool-cache.json`. Legacy entries are re-screened on flush.
+- **No persist-file bloat** — values over 100KB are memory-only, capping the disk file
+  (~1GB theoretical before) at a few MB.
+- **Non-string message content is bounded** — `aura_compress`/`aura_optimize` clipped
+  string content but block arrays bypassed the clip; oversized non-string content now
+  degrades to a placeholder.
+- **64MB stdin line guard** — a line with no newline could grow `buf` unboundedly; now
+  one Parse error is emitted, the offending line is drained, and the server keeps serving.
+
+### Fixed (protocol)
+- **Protocol version negotiation** — `initialize` now echoes the client's version only
+  when it's in the known-compatible set (`2024-11-05`, `2025-03-26`, `2025-06-18`);
+  anything else falls back to the version the server actually supports instead of
+  blindly claiming support for unknown future revisions.
+- **JSON-RPC 2.0 compliance** — an unparseable line now gets a `-32700 Parse error`
+  response (id: null) instead of silent deletion; non-object/batch requests get
+  `-32600 Invalid Request` when an id survives.
+- **Full capabilities advertised** — `initialize` now correctly declares `prompts`
+  (it always handled `prompts/list`), plus `listChanged: false` flags, and ships an
+  `instructions` string so MCP clients display what AURA does.
+
+### Added
+- **Version stamping** — `aura_stats`, `aura_savings`, and the `aura://savings` resource
+  now carry the server `version`, so a client/dashboard can always tell which build is
+  live. `aura_savings` and the resource now share one payload builder (single source of
+  truth).
+- **MCP integration tests** for the new surfaces: ping, unknown method (-32601),
+  `aura_trim_output` end-to-end, secret refusal with reason, parse-error response,
+  oversized block-array content, secret/size persistence guards, ReDoS regression.
+
 ## [0.7.0] — 2026-10-02
 
 The "best of the token-saver repos" release — four upgrades extracted from a survey of

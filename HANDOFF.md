@@ -1,10 +1,27 @@
-# AURA HANDOFF — 2026-10-02 (v0.7.0 shipped)
+# AURA HANDOFF — 2026-10-02 (v0.7.1 shipped)
 
 Pick up here. Everything below is the verified state of the world + what's next.
 
 ---
 
-## 1. What shipped in v0.7.0 (this commit)
+## 0. Latest: v0.7.1 (audit + protocol hardening)
+
+Full security audit + MCP protocol polish on top of 0.7.0. **198/198 tests green.**
+
+- **P0 ReDoS fixed** — the shared secret screen's connection-string regex was
+  catastrophic-quadratic on large uniform values; a 400KB tool result HUNG the process.
+  Bounded the scheme prefix; now ~20ms. Pinned by a regression test.
+- **Secrets never hit the disk** — the persistent tool-cache screens cached values:
+  secret-bearing results stay memory-only. Legacy entries re-screened on flush.
+- **Bloat + memory guards** — >100KB values don't persist; non-string message content
+  is bounded in aura_compress/aura_optimize; 64MB stdin-line guard drains abuse.
+- **Protocol compliance** — proper version negotiation (2024-11-05 / 2025-03-26 /
+  2025-06-18), `-32700` parse-error and `-32600` invalid-request responses, full
+  capabilities + `instructions` in `initialize`.
+- **Version stamping** — `aura_stats`, `aura_savings`, and `aura://savings` all carry
+  `version` so any client can tell which build is live.
+
+## 1. What shipped in v0.7.0
 
 Extracted from a survey of 4 token-saver repos (ppgranger/token-saver, jnbno1163/LG-token-saver,
 Marktechpost/Token-Saver, lokikill123/codex-token-skills — all cloned under

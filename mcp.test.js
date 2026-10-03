@@ -22,7 +22,7 @@ function run(frames) {
       try { resolve(out.split('\n').filter(Boolean).map((l) => JSON.parse(l))); }
       catch (e) { reject(new Error('bad stdout (protocol pollution?): ' + out.slice(0, 200))); }
     });
-    for (const f of frames) p.stdin.write(JSON.stringify(f) + '\n');
+    for (const f of frames) p.stdin.write((typeof f === 'string' ? f : JSON.stringify(f)) + '\n');
     p.stdin.end();
   });
 }
@@ -92,7 +92,34 @@ function run(frames) {
       ]
     } } },
     // resources/read: pull the savings ledger as a resource.
-    { jsonrpc: '2.0', id: 13, method: 'resources/read', params: { uri: 'aura://savings' } }
+    { jsonrpc: '2.0', id: 13, method: 'resources/read', params: { uri: 'aura://savings' } },
+    // ping: must return an empty result.
+    { jsonrpc: '2.0', id: 14, method: 'ping' },
+    // unknown method with an id -> JSON-RPC -32601.
+    { jsonrpc: '2.0', id: 15, method: 'no/such/method' },
+    // aura_trim_output: a noisy install log must shrink and be booked in the ledger.
+    { jsonrpc: '2.0', id: 16, method: 'tools/call', params: { name: 'aura_trim_output', arguments: {
+      name: 'npm install',
+      output: ('npm warn deprecated left-pad\n').repeat(200) + 'added 1245 packages, and audited 1246 packages in 12s\n'
+    } } },
+    // aura_remember: a secret-bearing pair must be REFUSED with a reason.
+    { jsonrpc: '2.0', id: 17, method: 'tools/call', params: { name: 'aura_remember', arguments: {
+      prompt: 'my api key', answer: 'sk-abcdefghijklmnopqrstuv'
+    } } },
+    // aura_remember: a normal pair must be accepted.
+    { jsonrpc: '2.0', id: 18, method: 'tools/call', params: { name: 'aura_remember', arguments: {
+      prompt: 'what is the aura cache', answer: 'a bounded local answer cache'
+    } } },
+    // aura_compress with OVERSIZED block-array content -> bounded to a placeholder, no crash.
+    { jsonrpc: '2.0', id: 19, method: 'tools/call', params: { name: 'aura_compress', arguments: {
+      messages: [
+        { role: 'user', content: 'read the log' },
+        { role: 'tool', content: [{ type: 'text', text: 'LOG '.repeat(200000) }] },
+        { role: 'assistant', content: 'ok' }
+      ]
+    } } },
+    // an unparseable line -> JSON-RPC 2.0 Parse error (id: null)
+    'this-is-not-valid-json'
   ]);
   const byId = {};
   for (const m of msgs) if (m.id != null) byId[m.id] = m;
@@ -151,7 +178,39 @@ function run(frames) {
   assert.ok(res && Array.isArray(res.contents) && res.contents[0].uri === 'aura://savings', 'resources/read returns the savings resource');
   const ledger = JSON.parse(res.contents[0].text);
   assert.ok(ledger.answerCache && typeof ledger.answerCache === 'object', 'savings resource carries the answer-cache ledger');
+  assert.ok(typeof ledger.version === 'string' && ledger.version.length > 0, 'savings resource carries the server version');
+
+  // ping -> empty result
+  assert.ok(byId[14] && byId[14].result && Object.keys(byId[14].result).length === 0, 'ping returns an empty result');
+
+  // unknown method -> JSON-RPC error -32601
+  assert.ok(byId[15] && byId[15].error && byId[15].error.code === -32601, 'unknown method returns -32601');
+
+  // aura_trim_output: saved tokens + kept the result tail.
+  const trim = JSON.parse(byId[16].result.content[0].text);
+  assert.ok(trim.report && trim.report.tokensSaved > 0, 'aura_trim_output saved tokens on the noisy install log');
+  assert.ok(/added 1245 packages/.test(trim.output), 'aura_trim_output kept the result tail');
+
+  // aura_remember: secret refused WITH a reason; normal pair accepted.
+  const refused = JSON.parse(byId[17].result.content[0].text);
+  assert.equal(refused.ok, false, 'secret pair refused');
+  assert.equal(refused.reason, 'secret-detected', 'refusal carries the reason');
+  const accepted = JSON.parse(byId[18].result.content[0].text);
+  assert.equal(accepted.ok, true, 'normal pair remembered');
+
+  // oversized block-array content is bounded to a placeholder — no crash, compresses fine
+  const bounded = JSON.parse(byId[19].result.content[0].text);
+  assert.ok(Array.isArray(bounded.messages), 'aura_compress handled oversized block content');
+  assert.ok(bounded.stats && Number.isFinite(bounded.stats.saved), 'stats reported for the bounded content');
+
+  // unparseable line -> Parse error with id: null (JSON-RPC 2.0 5.1)
+  const parseErr = msgs.find((m) => m.id === null && m.error && m.error.code === -32700);
+  assert.ok(parseErr, 'invalid JSON gets a -32700 Parse error response');
+
+  // initialize: capabilities + instructions present (protocol polish)
+  assert.ok(byId[1].result.capabilities && byId[1].result.capabilities.prompts, 'initialize advertises the prompts capability');
+  assert.ok(typeof byId[1].result.instructions === 'string' && byId[1].result.instructions.length > 0, 'initialize returns instructions');
 
   try { require('node:fs').rmSync(TEST_HOME, { recursive: true, force: true }); } catch (_) {}
-  console.log('✅ mcp.test PASS — handshake · 9 tools · savings resource · select_tools · optimize · free compute · oversized-input · unknown-tool · compress · savings · distill');
-})().catch((e) => { console.error('❌ mcp.test FAIL:', e.message); process.exit(1); });
+  console.log('mcp.test PASS - handshake, 9 tools, savings resource, select_tools, optimize, trim_output, secret-refusal, parse-error, free compute, oversized-input, unknown-tool, compress, savings, distill');
+})().catch((e) => { console.error('mcp.test FAIL:', e.message); process.exit(1); });
