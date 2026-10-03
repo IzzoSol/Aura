@@ -65,7 +65,7 @@ function fmtStats(s) {
   out(`  tokens saved ${C.g}${s.tokensSaved.toLocaleString()}${C.x}   cost saved ${C.y}$${s.costSavedUsd.toFixed(6)}${C.x}`);
   // per-surface breakdown: where the savings actually came from (tokens + $ each)
   const tbm = s.tokensByMethod || {}, cbm = s.costByMethod || {}, bm = s.byMethod || {};
-  const LABEL = { toolInject: 'tool injection', compress: 'history compress', distill: 'distill', fetch: 'cache (exact)', query: 'cache (fuzzy)', skill: 'skills', compute: 'compute' };
+  const LABEL = { toolInject: 'tool injection', compress: 'history compress', distill: 'distill', fetch: 'cache (exact)', query: 'cache (fuzzy)', skill: 'skills', compute: 'compute', outputTrim: 'output trim' };
   const rows = Object.keys(LABEL).filter((m) => (tbm[m] || 0) > 0 || (bm[m] || 0) > 0).sort((a, b) => (tbm[b] || 0) - (tbm[a] || 0));
   if (rows.length) {
     out(`  ${C.d}by surface:${C.x}`);

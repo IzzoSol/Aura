@@ -136,7 +136,7 @@ Beyond shape, the validator rejects: a regex (`regex:true` or a `/.../ ` literal
 
 ### Precedence
 
-When several skills match one prompt, the winner is chosen by explicit **`priority`** (0–1000, higher wins; default 100) → **keyword count** (more specific wins) → **insertion order**. The overall route order is **exact cache → fuzzy cache → skill → compute**.
+When several skills match one prompt, the winner is chosen by explicit **`priority`** (0–1000, higher wins; default 100) → **keyword count** (more specific wins) → **insertion order**. The overall route order is **exact cache → skill → compute → fuzzy cache** — a deterministic answer (skill/compute) always beats an approximate paraphrase match.
 
 ```
 aura skill add "deploy-prod" --match "deploy prod" --do "run: npm run deploy:prod" --priority 900
@@ -232,17 +232,18 @@ Point any MCP client at `aura-mcp`. stdout stays pure JSON-RPC (logs go to stder
 { "mcpServers": { "aura": { "command": "npx", "args": ["-y", "-p", "shaddai-aura", "aura-mcp"] } } }
 ```
 
-It exposes six zero-dependency tools:
+It exposes nine zero-dependency tools:
 
 | Tool | What it does |
 |---|---|
 | `aura_ask` | Try to answer a prompt for **free** (cache / saved skill / compute). The model calls this *first*; on a hit it skips its own reasoning. |
-| `aura_remember` | Cache an answer the model just generated, so it's free next time. |
+| `aura_remember` | Cache an answer the model just generated, so it's free next time. Refuses secret-bearing pairs (`reason: secret-detected`). |
 | `aura_stats` | Show tokens & dollars saved. |
 | `aura_distill` | Trim redundant instructions from a prompt/system-prompt (protects safety/output/routing rules; flags the rest). |
 | `aura_compress` | Shrink a long conversation history before the next turn. |
 | `aura_select_tools` | Selective tool injection — return only the tools this turn needs from your full toolbox (fails open). |
 | `aura_optimize` | The full one-call optimizer — trim tools + distill system + compress history on a whole request. |
+| `aura_trim_output` | Shape a noisy tool/command result **before it enters context** (install/build/test/lint/git families, asymmetric success/failure budgets, critical-line recovery). |
 | `aura_savings` | Combined answer-cache + tool-cache savings report. |
 
 Plus a read-only resource **`aura://savings`** — the live per-surface savings ledger, pullable straight into a client's context.
@@ -256,12 +257,15 @@ Plus a read-only resource **`aura://savings`** — the live per-surface savings 
 | **TOOL INJECTION** | send only the tools this prompt needs, not all 40 — the biggest per-call win (~82% of tool-schema tokens), fails open so a needed tool is never dropped |
 | **COMPRESS** | shrink the conversation history before each turn (dedup re-read files, collapse repeated log/retry lines, truncate stale tool dumps) |
 | **DISTILL** | trim redundant instructions from the prompt/system-prompt itself |
-| **CACHE / QUERY** | bounded TTL cache of prior answers + fuzzy paraphrase hits |
+| **OUTPUT TRIM** | shape a noisy tool/command result *before it enters context* — install/build/test/lint/git families, asymmetric budgets (success keeps ~5 tail lines, failure ~50), error-line recovery, ratio gate |
+| **CACHE / QUERY** | bounded TTL cache of prior answers + fuzzy paraphrase hits; secrets are screened out and volatile prompts get a short TTL |
+| **TOOL CACHE** | repeated tool calls served from a PERSISTENT cache (`<AURA_HOME>/aura-tool-cache.json`) — savings compound across sessions; mutating tools never cached |
 | **SKILL / RECIPE** | author-defined skills run without the model |
 | **COMPUTE** | deterministic locally-computed answers — math, %, unit/temp conversion, dates, hashing, base conversion, color, etc. (a bonus fast-path, not the headline) |
 
-AURA saves on **four surfaces of every call**: the **tools** (inject), the **history**
-(compress), the **instructions** (distill), and repeat **answers** (cache/compute/skill).
+AURA saves on **five surfaces of every call**: the **tools** (inject), the **history**
+(compress), the **instructions** (distill), the **tool results** (output trim), and repeat
+**answers** (cache/compute/skill).
 
 Core audited safe: no `eval` / `Function` / `child_process` / shell, bounded cache, zero deps.
 

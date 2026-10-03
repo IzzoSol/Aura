@@ -27,6 +27,8 @@ const { computeExtra } = require('./lib/compute-ops');
 const toolSelect = require('./lib/tool-select');
 const contextCompress = require('./lib/context-compress');
 const promptDistill = require('./lib/prompt-distill');
+const { hasSecret, VOLATILE } = require('./lib/learn-sessions');
+const { trimOutput } = require('./lib/output-trim');
 
 // --------------------------------------------------------------------------- config
 const DATA_DIR    = process.env.AURA_HOME || path.join(os.homedir(), '.shaddai-aura');
@@ -37,8 +39,17 @@ const SKILLS_FILE = path.join(DATA_DIR, 'skills.json');
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const MAX_ENTRIES    = 5000;
 const SIM_THRESHOLD  = 0.82;
-const COST_PER_1K    = 0.0005;
+// $/1k tokens for the savings ledger — override with AURA_COST_PER_1K (e.g. '0.003'
+// for a $3/M model). Default $0.50/M is a conservative blended estimate.
+const COST_PER_1K = (() => {
+  const n = parseFloat(process.env.AURA_COST_PER_1K);
+  return Number.isFinite(n) && n >= 0 ? n : 0.0005;
+})();
 const CHARS_PER_TOK  = 4;
+// Volatile prompts (price / now / latest / today …) get a short TTL, not the flat
+// 24h default — a stale answer is worse than a miss, and 15 min still catches
+// rapid re-asks (the common agent loop of re-checking within a task).
+const VOLATILE_TTL_MS = 15 * 60 * 1000;
 
 // --------------------------------------------------------------------------- json fs
 function ensureDir() { try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) {} }
@@ -46,7 +57,7 @@ function readJson(file, fb) { try { return JSON.parse(fs.readFileSync(file, 'utf
 function writeJson(file, obj) { try { ensureDir(); fs.writeFileSync(file, JSON.stringify(obj, null, 2)); return true; } catch (_) { return false; } }
 
 // --------------------------------------------------------------------------- stats
-const METHODS = ['fetch', 'query', 'skill', 'compute', 'distill', 'toolInject', 'compress'];
+const METHODS = ['fetch', 'query', 'skill', 'compute', 'distill', 'toolInject', 'compress', 'outputTrim'];
 function loadStats() {
   const s = readJson(STATS_FILE, { hits: 0, misses: 0, tokensSaved: 0, byMethod: {}, tokensByMethod: {} });
   // back-fill any missing method buckets (older stats files predate some surfaces)
@@ -362,11 +373,43 @@ function recordAnswer(prompt, answer, opts = {}) {
   try {
     const p = String(prompt || '');
     if (!p.trim() || answer === undefined || answer === null) return false;
+    const a = String(answer);
+    // SECRET SCREEN — never persist a pair whose prompt or answer carries an API key /
+    // token / private key / credential. A cache is plaintext on disk; redaction-beats-
+    // caching: refusing to store beats storing-then-hiding. (The secret patterns are
+    // shared with learn-sessions so every entry path screens identically.)
+    if (hasSecret(p) || hasSecret(a)) return false;
     const cache = pruneCache(loadCache());
-    cache[hashKey(p)] = { prompt: p, answer: String(answer), ts: Date.now(), ttl: Number(opts.ttlMs) > 0 ? Number(opts.ttlMs) : DEFAULT_TTL_MS };
+    // VOLATILITY-AWARE TTL — an explicitly-set ttlMs always wins; otherwise a
+    // time-sensitive PROMPT gets a short TTL instead of the flat 24h default.
+    let ttl = DEFAULT_TTL_MS;
+    if (Number(opts.ttlMs) > 0) ttl = Number(opts.ttlMs);
+    else if (VOLATILE.test(p)) ttl = VOLATILE_TTL_MS;
+    cache[hashKey(p)] = { prompt: p, answer: a, ts: Date.now(), ttl };
     pruneCache(cache);
     return writeJson(CACHE_FILE, cache);
   } catch (_) { return false; }
+}
+
+/**
+ * remember(prompt, answer, opts) — recordAnswer with caller-visible REASONS.
+ * Returns { ok:true } or { ok:false, reason:'secret-detected'|'write-failed' } so
+ * MCP/CLI callers can tell the agent WHY a pair wasn't stored (a silent refusal
+ * teaches the agent nothing; a reason lets it redact and retry).
+ */
+function remember(prompt, answer, opts = {}) {
+  const p = String(prompt || ''), a = String(answer == null ? '' : answer);
+  if (hasSecret(p) || hasSecret(a)) return { ok: false, reason: 'secret-detected', stored: false };
+  const stored = recordAnswer(p, a, opts);
+  return stored ? { ok: true, stored: true } : { ok: false, reason: 'write-failed', stored: false };
+}
+
+// Record tool-output-shaping savings into the shared ledger (4th pillar). `saved` is
+// the estimated tokens kept out of context by lib/output-trim.
+function recordOutputTrim(saved) {
+  const n = Number(saved);
+  if (!Number.isFinite(n) || n <= 0) return false;
+  try { bumpStats((s) => { s.byMethod.outputTrim = (s.byMethod.outputTrim || 0) + 1; addSaved(s, 'outputTrim', n); }); return true; } catch (_) { return false; }
 }
 
 function stats() {
@@ -867,9 +910,9 @@ async function ask(prompt, opts = {}) {
 }
 
 module.exports = {
-  route, recordAnswer, recordDistill, selectTools, optimize, stats, clearCache, ask, askLLM, compute, cosineSim, classifyTier, pickModel,
+  route, recordAnswer, remember, recordDistill, recordOutputTrim, selectTools, optimize, stats, clearCache, ask, askLLM, compute, cosineSim, classifyTier, pickModel,
   // context-optimizer surfaces (also usable standalone)
-  distill: promptDistill.distill, compress: contextCompress.compress,
+  distill: promptDistill.distill, compress: contextCompress.compress, trimOutput,
   // Stage 2 — saved-skills registry
   addSkill, listSkills, removeSkill, matchSkill, runAdapter, ADAPTERS,
   // Phase 1 — schema validation

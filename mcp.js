@@ -156,6 +156,25 @@ const TOOLS = [
         cache: { type: 'boolean', description: 'Mark the stable prefix cacheable (Anthropic cache_control).' }
       }
     }
+  },
+  {
+    name: 'aura_trim_output',
+    description:
+      'Shape a tool/command result BEFORE it enters context: strips ANSI noise, collapses repeated lines, and trims ' +
+      'known-noisy command families (npm install, builds, test runs, lint, git diff/log) to their result lines. ' +
+      'ASYMMETRIC budget: success keeps the last ~5 lines, failure keeps the last ~50 — and error-shaped lines from ' +
+      'elided sections are RECOVERED so compression never eats the failure reason. ' +
+      "Returns { output, report }. If report.reason is 'no-gain' or 'too-small', use your original output.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The tool or command name (e.g. "npm install", "pytest") — drives format-aware filtering.' },
+        output: { type: 'string', description: 'The raw tool/command output to trim.' },
+        failed: { type: 'boolean', description: 'Explicit success/failure verdict. Omit to auto-infer from the tail.' },
+        maxLines: { type: 'integer', description: 'Override the retention budget (generic strategy only).' }
+      },
+      required: ['output']
+    }
   }
 ];
 
@@ -173,8 +192,11 @@ async function callTool(name, args) {
     return textResult({ hit: false, note: 'No free answer — generate it yourself, then call aura_remember to cache it.' });
   }
   if (name === 'aura_remember') {
-    aura.recordAnswer(clip(args.prompt, MAX_PROMPT), clip(args.answer, MAX_ANSWER));
-    return textResult({ ok: true, remembered: true });
+    // Secret screen + reason surface: a silent refusal teaches the agent nothing —
+    // 'secret-detected' lets it redact and retry; 'write-failed' tells it to back off.
+    const r = aura.remember(clip(args.prompt, MAX_PROMPT), clip(args.answer, MAX_ANSWER));
+    if (r && r.ok) return textResult({ ok: true, remembered: true });
+    return textResult({ ok: false, remembered: false, reason: r && r.reason });
   }
   if (name === 'aura_stats') {
     return textResult(aura.stats());
@@ -240,6 +262,19 @@ async function callTool(name, args) {
     if (args.cache === true) opts.cache = true;
     const r = aura.optimize(request, opts);
     return textResult({ request: r.request, report: r.report });
+  }
+  if (name === 'aura_trim_output') {
+    const res = aura.trimOutput({
+      name: clip(args.name, 200),
+      output: clip(args.output, MAX_ANSWER),
+      failed: args.failed === true ? true : args.failed === false ? false : undefined,
+      maxLines: args.maxLines
+    });
+    try {
+      const saved = res && res.report && Number(res.report.tokensSaved);
+      if (Number.isFinite(saved) && saved > 0) aura.recordOutputTrim(saved);
+    } catch (_) {}
+    return textResult(res);
   }
   return Object.assign(textResult('Unknown tool: ' + name), { isError: true });
 }

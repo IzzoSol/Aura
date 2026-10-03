@@ -3,6 +3,41 @@
 All notable changes to **shaddai-aura** (AURA). Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semver.
 
+## [0.7.0] — 2026-10-02
+
+The "best of the token-saver repos" release — four upgrades extracted from a survey of
+the best open-source token savers (format-aware output shaping, persistent tool caching,
+credential-safe caching, volatility-aware TTLs).
+
+### Added
+- **Tool-output shaping (`aura_trim_output`, `lib/output-trim.js`)** — AURA's first
+  OUTPUT-side surface. Shape a tool/command result BEFORE it enters context: ANSI strip,
+  repeated-line collapse, format-aware keeps for known-noisy families (npm install,
+  builds, test runners, lint, git diff/log/remote), an asymmetric budget (success keeps
+  the last ~5 lines, failure keeps the last ~50), **critical-line recovery** (error-shaped
+  lines from elided sections are re-appended, capped — compression can never silently eat
+  the failure reason), and a ratio gate (no gain → original returned). Ledger: method
+  `outputTrim`.
+- **Persistent tool cache** — `lib/tool-cache.js` entries AND stats now persist to
+  `<AURA_HOME>/aura-tool-cache.json`, so tool-call savings compound across sessions
+  (previously every MCP server process died with its stats at zero). Write-behind with
+  debounce + exit flush; multi-process-safe via monotone max-merge on flush. Kill-switch:
+  `AURA_TOOL_CACHE_PERSIST=0`. `wrap()` now accepts any argument shape (multi-arg tools
+  are keyed on the full argument list, object-arg order-independent).
+- **Credential-safe caching** — `recordAnswer`/`remember` now run the `learn-sessions`
+  secret screen (API keys, JWTs, PEM blocks, high-entropy tokens, connection strings) on
+  prompt AND answer before persisting; secrets are never written to the plaintext cache.
+  MCP `aura_remember` returns `{ ok:false, reason:'secret-detected' }` instead of silently
+  refusing, so an agent can redact and retry.
+- **Volatility-aware TTLs** — time-sensitive prompts (price / now / latest / today …)
+  recorded via `remember`/`--llm` get a 15-minute TTL instead of the flat 24h default, so
+  a stale answer can never outlive its freshness. An explicit `ttlMs` always wins.
+
+### Changed
+- **Configurable cost rate** — `AURA_COST_PER_1K` env overrides the hardcoded $0.50/M
+  ledger rate, so `stats().costSavedUsd` can match the model you actually use.
+- MCP surface grows to **9 tools** (`aura_trim_output` joins the 8 from 0.6.2).
+
 ## [0.6.2] — 2026-07-19
 
 ### Added

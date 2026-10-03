@@ -99,12 +99,13 @@ function run(frames) {
 
   assert.equal(byId[1].result.serverInfo.name, 'aura', 'initialize returns serverInfo');
   const toolNames = byId[2].result.tools.map((t) => t.name);
-  assert.ok(Array.isArray(byId[2].result.tools) && byId[2].result.tools.length === 8, '8 tools listed');
+  assert.ok(Array.isArray(byId[2].result.tools) && byId[2].result.tools.length === 9, '9 tools listed');
   assert.ok(toolNames.includes('aura_compress'), 'tools/list advertises aura_compress');
   assert.ok(toolNames.includes('aura_savings'), 'tools/list advertises aura_savings');
   assert.ok(toolNames.includes('aura_distill'), 'tools/list advertises aura_distill');
   assert.ok(toolNames.includes('aura_select_tools'), 'tools/list advertises aura_select_tools');
   assert.ok(toolNames.includes('aura_optimize'), 'tools/list advertises aura_optimize');
+  assert.ok(toolNames.includes('aura_trim_output'), 'tools/list advertises aura_trim_output');
   const compressTool = byId[2].result.tools.find((t) => t.name === 'aura_compress');
   assert.ok(compressTool.inputSchema.properties.messages, 'aura_compress schema has messages');
   assert.ok(byId[3].result.resources.some((r) => r.uri === 'aura://savings'), 'resources/list advertises the savings resource');
@@ -152,5 +153,5 @@ function run(frames) {
   assert.ok(ledger.answerCache && typeof ledger.answerCache === 'object', 'savings resource carries the answer-cache ledger');
 
   try { require('node:fs').rmSync(TEST_HOME, { recursive: true, force: true }); } catch (_) {}
-  console.log('✅ mcp.test PASS — handshake · 8 tools · savings resource · select_tools · optimize · free compute · oversized-input · unknown-tool · compress · savings · distill');
+  console.log('✅ mcp.test PASS — handshake · 9 tools · savings resource · select_tools · optimize · free compute · oversized-input · unknown-tool · compress · savings · distill');
 })().catch((e) => { console.error('❌ mcp.test FAIL:', e.message); process.exit(1); });

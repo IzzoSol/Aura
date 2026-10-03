@@ -1,6 +1,13 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
+const os = require('os');
+const path = require('path');
+
+// Isolate BEFORE require: with v0.7 the tool-cache persists to <AURA_HOME>, so an
+// unisolated run would both seed assertions from the real cache and ZERO the live
+// file via clearToolCache().
+process.env.AURA_HOME = path.join(os.tmpdir(), 'aura-toolcache-unit-' + Date.now() + '-' + process.pid);
 const { wrap, toolStats, clearToolCache, pickTtl, isMutating } = require('./lib/tool-cache');
 
 test('repeat call with same args is served from cache (fn runs once)', async () => {
